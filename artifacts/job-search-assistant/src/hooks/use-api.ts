@@ -58,10 +58,19 @@ export function useUpdateProfile() {
   });
 }
 
-export function useUploadResume() {
+// Upload + parse a resume for review (does NOT commit).
+export function useParseResume() {
+  return useMutation({
+    mutationFn: (file: File) => api.profile.parseResume(file),
+  });
+}
+
+// Commit a reviewed resume.
+export function useConfirmResume() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => api.profile.uploadResume(file),
+    mutationFn: (data: Parameters<typeof api.profile.confirmResume>[0]) =>
+      api.profile.confirmResume(data),
     onSuccess: (data) => {
       queryClient.setQueryData(queryKeys.profile, data);
     },
@@ -116,9 +125,59 @@ export function useDeleteJob() {
   });
 }
 
-export function useTailorJob() {
+export function useExtractJob() {
   return useMutation({
-    mutationFn: (id: number) => api.jobs.tailor(id),
+    mutationFn: (data: Parameters<typeof api.jobs.extract>[0]) => api.jobs.extract(data),
+  });
+}
+
+export function useTailorStart() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.jobs.tailorStart(id),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.job(id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs });
+    },
+  });
+}
+
+export function useRecordQa() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { question: string; answer: string } }) =>
+      api.jobs.recordQa(id, data),
+    onSuccess: () => {
+      // A new saved answer landed on the profile.
+      queryClient.invalidateQueries({ queryKey: queryKeys.profile });
+    },
+  });
+}
+
+export function useTailorFinalize() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.tailorFinalize>[1] }) =>
+      api.jobs.tailorFinalize(id, data),
+  });
+}
+
+export function useTailorRevise() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.tailorRevise>[1] }) =>
+      api.jobs.tailorRevise(id, data),
+  });
+}
+
+export function useTailorApprove() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.tailorApprove>[1] }) =>
+      api.jobs.tailorApprove(id, data),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.job(id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs });
+      queryClient.invalidateQueries({ queryKey: queryKeys.documents(id) });
+    },
   });
 }
 
@@ -131,16 +190,81 @@ export function useDocuments(jobId: number) {
   });
 }
 
-export function useGenerateDocument() {
+// Cover letters
+export function useCoverLetterStart() {
+  return useMutation({ mutationFn: (id: number) => api.jobs.coverLetterStart(id) });
+}
+export function useCoverLetterFinalize() {
   return useMutation({
-    mutationFn: ({ jobId, type }: { jobId: number, type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' }) => 
-      api.documents.generate(jobId, type),
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.coverLetterFinalize>[1] }) =>
+      api.jobs.coverLetterFinalize(id, data),
+  });
+}
+export function useCoverLetterRevise() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.coverLetterRevise>[1] }) =>
+      api.jobs.coverLetterRevise(id, data),
+  });
+}
+export function useCoverLetterApprove() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.coverLetterApprove>[1] }) =>
+      api.jobs.coverLetterApprove(id, data),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.documents(id) });
+    },
   });
 }
 
-export function useDiscoverSearch(query: string = "") {
+// Application questions
+export function useQuestionsStart() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { questions: string } }) =>
+      api.jobs.questionsStart(id, data),
+  });
+}
+export function useQuestionsFinalize() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.questionsFinalize>[1] }) =>
+      api.jobs.questionsFinalize(id, data),
+  });
+}
+export function useQuestionsSave() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.questionsSave>[1] }) =>
+      api.jobs.questionsSave(id, data),
+  });
+}
+
+// Discover
+export function useDiscoverSettings() {
   return useQuery({
-    queryKey: ['discover', query],
-    queryFn: () => api.discover.search(query),
+    queryKey: ['discover', 'settings'],
+    queryFn: () => api.discover.getSettings(),
+  });
+}
+
+export function useSaveDiscoverSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: Parameters<typeof api.discover.updateSettings>[0]) =>
+      api.discover.updateSettings(settings),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['discover', 'settings'], data);
+    },
+  });
+}
+
+export function useDiscoverSearch() {
+  return useMutation({
+    mutationFn: (override?: Parameters<typeof api.discover.search>[0]) =>
+      api.discover.search(override),
+  });
+}
+
+export function useDismissDiscover() {
+  return useMutation({
+    mutationFn: (url: string) => api.discover.dismiss(url),
   });
 }

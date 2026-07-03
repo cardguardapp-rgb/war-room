@@ -26,6 +26,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     company TEXT,
+    location TEXT,
+    work_arrangement TEXT,
     source_url TEXT,
     posting_text TEXT,
     status TEXT NOT NULL DEFAULT 'New' CHECK (status IN ('New', 'Tailoring', 'Ready', 'Applied')),
@@ -49,7 +51,34 @@ db.exec(`
     answer TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Discover: the user's editable search parameters (single row).
+  CREATE TABLE IF NOT EXISTS discover_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    settings_json TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Discover: URLs the user dismissed, so they're never shown again.
+  CREATE TABLE IF NOT EXISTS discover_dismissed (
+    url TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
+
+// --- Lightweight migrations for databases created before a column existed ---
+// SQLite has no "ADD COLUMN IF NOT EXISTS", so add + swallow the duplicate error.
+function ensureColumn(table: string, column: string, definition: string): void {
+  const existing = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as { name: string }[];
+  if (existing.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  logger.info({ table, column }, "Added missing column");
+}
+
+ensureColumn("jobs", "location", "TEXT");
+ensureColumn("jobs", "work_arrangement", "TEXT");
 
 logger.info({ dbPath }, "SQLite database ready");
 
@@ -62,10 +91,14 @@ export interface ProfileRow {
   updated_at: string;
 }
 
+export type WorkArrangement = "office" | "hybrid" | "remote" | "unknown";
+
 export interface JobRow {
   id: number;
   title: string;
   company: string | null;
+  location: string | null;
+  work_arrangement: string | null;
   source_url: string | null;
   posting_text: string | null;
   status: "New" | "Tailoring" | "Ready" | "Applied";
@@ -87,5 +120,16 @@ export interface QaLogRow {
   job_id: number;
   question: string;
   answer: string | null;
+  created_at: string;
+}
+
+export interface DiscoverSettingsRow {
+  id: number;
+  settings_json: string | null;
+  updated_at: string;
+}
+
+export interface DiscoverDismissedRow {
+  url: string;
   created_at: string;
 }

@@ -391,3 +391,15 @@
     inset: -1px;
   }
 }
+
+/* Touch devices: guarantee comfortable tap targets (>=44px). min-height wins
+   over any smaller explicit height set on a control. */
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  a[data-slot="button"] {
+    min-height: 44px;
+  }
+}

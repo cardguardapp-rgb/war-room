@@ -1,0 +1,137 @@
+import { JSDOM } from "jsdom";
+import { Readability } from "@mozilla/readability";
+import { createJson } from "./anthropic";
+import { EXTRACT_MODEL, JOB_EXTRACTION_SYSTEM } from "./prompts";
+
+export type WorkArrangement = "office" | "hybrid" | "remote" | "unknown";
+
+export interface ExtractedJob {
+  title: string;
+  company: string;
+  location: string;
+  work_arrangement: WorkArrangement;
+  posting_text: string;
+}
+
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+export type FetchResult =
+  | { ok: true; text: string }
+  | { ok: false; reason: string };
+
+/** Fetch a URL and extract the main article text (nav/ads stripped). */
+export async function fetchAndClean(url: string): Promise<FetchResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-AU,en;q=0.9",
+      },
+    });
+  } catch (err) {
+    const aborted = err instanceof Error && err.name === "AbortError";
+    return {
+      ok: false,
+      reason: aborted
+        ? "The page took too long to respond."
+        : "Could not reach that URL.",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    return {
+      ok: false,
+      reason: `The site returned HTTP ${res.status}. Many job boards (LinkedIn especially) block automated requests.`,
+    };
+  }
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("html")) {
+    return { ok: false, reason: "That URL did not return a readable web page." };
+  }
+
+  const html = await res.text();
+  let text = "";
+  try {
+    const dom = new JSDOM(html, { url });
+    const article = new Readability(dom.window.document).parse();
+    text = (article?.textContent ?? "").trim();
+    if (!text) {
+      text = (dom.window.document.body?.textContent ?? "").trim();
+    }
+  } catch {
+    return { ok: false, reason: "Could not parse the page content." };
+  }
+
+  text = text
+    .replace(/\r/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (text.length < 200) {
+    return {
+      ok: false,
+      reason:
+        "The page didn't contain a readable posting — it may be behind a login or bot wall (this is common on LinkedIn).",
+    };
+  }
+  return { ok: true, text };
+}
+
+/** Ask the model for the four metadata fields from posting text. */
+async function extractMeta(rawText: string): Promise<{
+  title: string;
+  company: string;
+  location: string;
+  work_arrangement: WorkArrangement;
+}> {
+  const p = await createJson<Partial<ExtractedJob>>({
+    model: EXTRACT_MODEL,
+    maxTokens: 1024,
+    system: JOB_EXTRACTION_SYSTEM,
+    user: rawText.slice(0, 60000),
+  });
+  const wa = p.work_arrangement;
+  return {
+    title: (p.title ?? "").trim(),
+    company: (p.company ?? "").trim(),
+    location: (p.location ?? "").trim(),
+    work_arrangement:
+      wa === "office" || wa === "hybrid" || wa === "remote" ? wa : "unknown",
+  };
+}
+
+/**
+ * Extract from a URL. The cleaned article text becomes posting_text; the model
+ * classifies the metadata. Returns ok:false with a reason if the fetch is
+ * blocked or the page is junk (caller then offers the paste fallback).
+ */
+export async function extractFromUrl(
+  url: string,
+): Promise<
+  | { ok: true; data: ExtractedJob & { source_url: string } }
+  | { ok: false; reason: string }
+> {
+  const fetched = await fetchAndClean(url);
+  if (!fetched.ok) return { ok: false, reason: fetched.reason };
+  const meta = await extractMeta(fetched.text);
+  return {
+    ok: true,
+    data: { ...meta, posting_text: fetched.text, source_url: url },
+  };
+}
+
+/** Extract from pasted text — the pasted text IS the posting_text. */
+export async function extractFromText(text: string): Promise<ExtractedJob> {
+  const meta = await extractMeta(text);
+  return { ...meta, posting_text: text.trim() };
+}

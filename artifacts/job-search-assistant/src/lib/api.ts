@@ -8,15 +8,31 @@ export class ApiError extends Error {
   }
 }
 
+// A network failure (offline, DNS, dropped connection) rejects fetch with a
+// TypeError — turn it into a readable ApiError so the UI can show + retry it.
+function networkError(): ApiError {
+  return new ApiError(
+    0,
+    navigator.onLine === false
+      ? "You appear to be offline. Check your connection and try again."
+      : "Couldn't reach the server. Check your connection and try again.",
+  );
+}
+
 async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${BASE_PATH}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-    credentials: "include",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_PATH}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+      credentials: "include",
+    });
+  } catch {
+    throw networkError();
+  }
 
   if (!response.ok) {
     let message = "An error occurred";
@@ -26,12 +42,12 @@ async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> 
     } catch (e) {
       // Ignore
     }
-    
+
     // Redirect to login on 401
     if (response.status === 401 && window.location.pathname !== "/") {
       window.location.href = "/";
     }
-    
+
     throw new ApiError(response.status, message);
   }
 
@@ -45,11 +61,16 @@ async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> 
 
 // Multipart specific fetch
 async function fetchMultipart<T>(path: string, formData: FormData): Promise<T> {
-  const response = await fetch(`${BASE_PATH}${path}`, {
-    method: "POST",
-    body: formData,
-    credentials: "include",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_PATH}${path}`, {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+    });
+  } catch {
+    throw networkError();
+  }
 
   if (!response.ok) {
     let message = "An error occurred";
@@ -59,11 +80,11 @@ async function fetchMultipart<T>(path: string, formData: FormData): Promise<T> {
     } catch (e) {
       // Ignore
     }
-    
+
     if (response.status === 401 && window.location.pathname !== "/") {
       window.location.href = "/";
     }
-    
+
     throw new ApiError(response.status, message);
   }
 
@@ -71,15 +92,69 @@ async function fetchMultipart<T>(path: string, formData: FormData): Promise<T> {
 }
 
 export type JobStatus = 'New' | 'Tailoring' | 'Ready' | 'Applied';
+export type WorkArrangement = 'office' | 'hybrid' | 'remote' | 'unknown';
 
 export interface Job {
   id: number;
   title: string;
   company: string | null;
+  location: string | null;
+  work_arrangement: string | null;
   source_url: string | null;
   posting_text: string | null;
   status: JobStatus;
   created_at: string;
+}
+
+export interface ExtractResponse {
+  fetch_failed?: boolean;
+  message?: string;
+  title?: string;
+  company?: string;
+  location?: string;
+  work_arrangement?: WorkArrangement;
+  posting_text?: string;
+  source_url?: string;
+}
+
+export interface ClarifyingQuestion {
+  question: string;
+  why: string;
+  affects: string;
+}
+
+export interface RecruiterFeedback {
+  rejection_risks: string[];
+  ats_gaps: string[];
+  overall: string;
+}
+
+export interface TailorResult {
+  proposed_resume: ResumeJson;
+  clarifying_questions: ClarifyingQuestion[];
+  recruiter_feedback: RecruiterFeedback;
+}
+
+export interface CoverLetterFull {
+  salutation: string;
+  re: string;
+  body: string;
+}
+
+export interface CoverLetterResult {
+  clarifying_questions: ClarifyingQuestion[];
+  full: CoverLetterFull;
+  short: string;
+}
+
+export interface DraftedAnswer {
+  question: string;
+  answer: string;
+}
+
+export interface AppQuestionsResult {
+  clarifying_questions: ClarifyingQuestion[];
+  answers: DraftedAnswer[];
 }
 
 export interface Document {
@@ -92,12 +167,135 @@ export interface Document {
   created_at: string;
 }
 
+// --- Discover ----------------------------------------------------------
+
+export type MatchVerdict = 'yes' | 'no' | 'unsure';
+
+export interface DiscoverSettings {
+  roleTitles: string[];
+  officeRegion: string;
+  remoteRule: string;
+  exclusions: string[];
+  extraKeywords: string;
+}
+
+export interface DiscoverResult {
+  url: string;
+  title: string;
+  company: string;
+  location: string;
+  work_arrangement: WorkArrangement;
+  seniority_match: MatchVerdict;
+  location_match: MatchVerdict;
+  reason: string;
+}
+
+export interface DiscoverSearchResponse {
+  results: DiscoverResult[];
+  counts: { raw: number; screened: number; kept: number };
+  note: string;
+}
+
+// --- Structured resume model (mirrors api-server/src/lib/resumeParser.ts) ---
+
+export type SectionKind =
+  | "contact"
+  | "summary"
+  | "experience"
+  | "education"
+  | "skills"
+  | "other";
+
+export interface ExperienceItem {
+  id: string;
+  title: string;
+  company: string;
+  dates: string;
+  location: string;
+  bullets: string[];
+}
+
+export interface EducationItem {
+  id: string;
+  institution: string;
+  qualification: string;
+  dates: string;
+  location: string;
+  details: string[];
+}
+
+export type ResumeSection =
+  | {
+      id: string;
+      kind: "contact";
+      heading: string;
+      name: string;
+      email: string;
+      phone: string;
+      location: string;
+      links: string[];
+      otherLines: string[];
+    }
+  | { id: string; kind: "summary"; heading: string; paragraphs: string[] }
+  | { id: string; kind: "experience"; heading: string; items: ExperienceItem[] }
+  | { id: string; kind: "education"; heading: string; items: EducationItem[] }
+  | { id: string; kind: "skills"; heading: string; items: string[] }
+  | {
+      id: string;
+      kind: "other";
+      heading: string;
+      paragraphs: string[];
+      bullets: string[];
+    };
+
+export interface ResumeJson {
+  version: 1;
+  sections: ResumeSection[];
+}
+
+export interface StyleEntry {
+  fontFamily: string | null;
+  fontSizePt: number | null;
+  bold: boolean;
+  italic: boolean;
+  color: string | null;
+}
+
+export interface StyleMap {
+  version: 1;
+  defaults: {
+    fontFamily: string | null;
+    fontSizePt: number | null;
+    color: string | null;
+  };
+  elements: {
+    name: StyleEntry;
+    sectionHeading: StyleEntry;
+    jobTitle: StyleEntry;
+    body: StyleEntry;
+    bullet: StyleEntry;
+  };
+}
+
+export interface ExtraAnswer {
+  id: string;
+  question: string;
+  answer: string;
+}
+
+export interface ParsedResume {
+  filename: string;
+  resume_json: ResumeJson;
+  style_map_json: StyleMap;
+  warnings: string[];
+}
+
 export interface Profile {
   id: number;
   resume_filename: string | null;
-  resume_json: any;
-  style_map_json: any;
-  extra_answers_json: any;
+  resume_json: ResumeJson | null;
+  style_map_json: StyleMap | null;
+  extra_answers_json: ExtraAnswer[] | null;
   updated_at: string;
 }
 
@@ -109,33 +307,73 @@ export const api = {
   },
   profile: {
     get: () => fetchApi<Profile | null>("/profile"),
-    update: (data: Partial<Pick<Profile, 'resume_json' | 'style_map_json' | 'extra_answers_json'>>) => 
+    update: (data: Partial<Pick<Profile, 'resume_json' | 'style_map_json' | 'extra_answers_json'>>) =>
       fetchApi<Profile>("/profile", { method: "PATCH", body: JSON.stringify(data) }),
-    uploadResume: (file: File) => {
+    // Upload + parse, WITHOUT committing. Returns the structure for review.
+    parseResume: (file: File) => {
       const formData = new FormData();
       formData.append("resume", file);
-      return fetchMultipart<Profile>("/profile/resume", formData);
+      return fetchMultipart<ParsedResume>("/profile/resume/parse", formData);
     },
-    // For download we just use window.open or an anchor tag with credentials include
+    // Commit a reviewed (possibly corrected) resume.
+    confirmResume: (data: { filename: string; resume_json: ResumeJson; style_map_json: StyleMap }) =>
+      fetchApi<Profile>("/profile/resume", { method: "PUT", body: JSON.stringify(data) }),
+    // Download the original .docx (formatting reference).
     getResumeUrl: () => `${BASE_PATH}/profile/resume`,
+    // Download a full backup (SQLite + generated docs) as a .zip.
+    getExportUrl: () => `${BASE_PATH}/profile/export`,
   },
   jobs: {
     list: () => fetchApi<Job[]>("/jobs"),
     get: (id: number) => fetchApi<Job>(`/jobs/${id}`),
-    create: (data: { title: string, company?: string, source_url?: string, posting_text?: string }) => 
+    extract: (data: { url?: string; posting_text?: string }) =>
+      fetchApi<ExtractResponse>("/jobs/extract", { method: "POST", body: JSON.stringify(data) }),
+    create: (data: { title: string; company?: string; location?: string; work_arrangement?: WorkArrangement; source_url?: string; posting_text?: string }) =>
       fetchApi<Job>("/jobs", { method: "POST", body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<Pick<Job, 'title' | 'company' | 'source_url' | 'posting_text' | 'status'>>) => 
+    update: (id: number, data: Partial<Pick<Job, 'title' | 'company' | 'location' | 'work_arrangement' | 'source_url' | 'posting_text' | 'status'>>) =>
       fetchApi<Job>(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: number) => fetchApi<void>(`/jobs/${id}`, { method: "DELETE" }),
-    tailor: (id: number) => fetchApi<{ status: string, message: string }>(`/jobs/${id}/tailor`, { method: "POST" }),
+    // Tailoring flow
+    tailorStart: (id: number) => fetchApi<TailorResult>(`/jobs/${id}/tailor`, { method: "POST" }),
+    recordQa: (id: number, data: { question: string; answer: string }) =>
+      fetchApi<{ extra_answers: unknown[] }>(`/jobs/${id}/qa`, { method: "POST", body: JSON.stringify(data) }),
+    tailorFinalize: (id: number, data: { answers: { question: string; answer: string }[]; current_resume: ResumeJson }) =>
+      fetchApi<TailorResult>(`/jobs/${id}/tailor/finalize`, { method: "POST", body: JSON.stringify(data) }),
+    tailorRevise: (id: number, data: { proposed_resume: ResumeJson; edit_request: string }) =>
+      fetchApi<TailorResult>(`/jobs/${id}/tailor/revise`, { method: "POST", body: JSON.stringify(data) }),
+    tailorApprove: (id: number, data: { proposed_resume: ResumeJson }) =>
+      fetchApi<Document>(`/jobs/${id}/tailor/approve`, { method: "POST", body: JSON.stringify(data) }),
+    // Cover letters
+    coverLetterStart: (id: number) => fetchApi<CoverLetterResult>(`/jobs/${id}/cover-letters`, { method: "POST" }),
+    coverLetterFinalize: (id: number, data: { answers: { question: string; answer: string }[]; current: CoverLetterResult }) =>
+      fetchApi<CoverLetterResult>(`/jobs/${id}/cover-letters/finalize`, { method: "POST", body: JSON.stringify(data) }),
+    coverLetterRevise: (id: number, data: { current: CoverLetterResult; edit_request: string }) =>
+      fetchApi<CoverLetterResult>(`/jobs/${id}/cover-letters/revise`, { method: "POST", body: JSON.stringify(data) }),
+    coverLetterApprove: (id: number, data: { full: CoverLetterFull; short: string }) =>
+      fetchApi<{ documents: Document[] }>(`/jobs/${id}/cover-letters/approve`, { method: "POST", body: JSON.stringify(data) }),
+    // Application questions
+    questionsStart: (id: number, data: { questions: string }) =>
+      fetchApi<AppQuestionsResult>(`/jobs/${id}/questions`, { method: "POST", body: JSON.stringify(data) }),
+    questionsFinalize: (id: number, data: { questions: string; answers: { question: string; answer: string }[] }) =>
+      fetchApi<AppQuestionsResult>(`/jobs/${id}/questions/finalize`, { method: "POST", body: JSON.stringify(data) }),
+    questionsSave: (id: number, data: { answers: { question: string; answer: string }[] }) =>
+      fetchApi<{ saved: number }>(`/jobs/${id}/questions/save`, { method: "POST", body: JSON.stringify(data) }),
   },
   documents: {
     list: (jobId: number) => fetchApi<Document[]>(`/jobs/${jobId}/documents`),
-    generate: (jobId: number, type: Document['type']) => 
-      fetchApi<{ status: string, message: string }>(`/jobs/${jobId}/documents/generate`, { method: "POST", body: JSON.stringify({ type }) }),
-    getDownloadUrl: (id: number) => `${BASE_PATH}/documents/${id}/download`,
+    getDownloadUrl: (id: number, format: "docx" | "pdf") => `${BASE_PATH}/documents/${id}/download/${format}`,
   },
   discover: {
-    search: (query?: string) => fetchApi<{ results: any[], message: string }>(`/discover/search${query ? `?q=${encodeURIComponent(query)}` : ''}`),
-  }
+    getSettings: () => fetchApi<DiscoverSettings>("/discover/settings"),
+    updateSettings: (settings: DiscoverSettings) =>
+      fetchApi<DiscoverSettings>("/discover/settings", { method: "PUT", body: JSON.stringify(settings) }),
+    // Runs the whole pipeline using the saved settings (or an inline override).
+    search: (override?: DiscoverSettings) =>
+      fetchApi<DiscoverSearchResponse>("/discover/search", {
+        method: "POST",
+        body: JSON.stringify(override ?? {}),
+      }),
+    dismiss: (url: string) =>
+      fetchApi<{ dismissed: true }>("/discover/dismiss", { method: "POST", body: JSON.stringify({ url }) }),
+  },
 };
