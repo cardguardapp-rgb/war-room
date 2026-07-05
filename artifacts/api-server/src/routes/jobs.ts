@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job, type Profile } from "../lib/db";
+import { serializeJob, serializeDocument } from "../lib/serialize";
 import { aiErrorResponse } from "../lib/anthropic";
 import { extractFromText, extractFromUrl } from "../lib/jobExtract";
 import { runTailor, type QaPair } from "../lib/tailor";
@@ -31,7 +32,7 @@ async function getProfileRow(): Promise<Profile | undefined> {
 
 router.get("/jobs", async (_req, res): Promise<void> => {
   const jobs = await db.select().from(jobsTable).orderBy(desc(jobsTable.createdAt), desc(jobsTable.id));
-  res.json(jobs);
+  res.json(jobs.map(serializeJob));
 });
 
 router.post("/jobs", async (req, res): Promise<void> => {
@@ -61,7 +62,7 @@ router.post("/jobs", async (req, res): Promise<void> => {
     })
     .returning();
 
-  res.status(201).json(row);
+  res.status(201).json(serializeJob(row));
 });
 
 router.get("/jobs/:id", async (req, res): Promise<void> => {
@@ -75,7 +76,7 @@ router.get("/jobs/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Job not found" });
     return;
   }
-  res.json(job);
+  res.json(serializeJob(job));
 });
 
 router.patch("/jobs/:id", async (req, res): Promise<void> => {
@@ -119,7 +120,7 @@ router.patch("/jobs/:id", async (req, res): Promise<void> => {
     await db.update(jobsTable).set(updates).where(eq(jobsTable.id, id));
   }
 
-  res.json(await getJob(id));
+  res.json(serializeJob((await getJob(id))!));
 });
 
 router.delete("/jobs/:id", async (req, res): Promise<void> => {
@@ -379,7 +380,7 @@ router.post("/jobs/:id/tailor/approve", async (req, res): Promise<void> => {
   await db.update(jobsTable).set({ status: "Ready" }).where(eq(jobsTable.id, id));
 
   req.log.info({ jobId: id }, "Tailored resume approved and saved");
-  res.status(201).json(document);
+  res.status(201).json(serializeDocument(document));
 });
 
 export default router;

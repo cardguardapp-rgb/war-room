@@ -162,8 +162,8 @@ export interface Document {
   job_id: number;
   type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note';
   content_json: any;
-  docx_path: string | null;
-  pdf_path: string | null;
+  docx_object_key: string | null;
+  pdf_object_key: string | null;
   created_at: string;
 }
 

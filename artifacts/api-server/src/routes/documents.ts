@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, eq, documentsTable, jobsTable, profileTable, type Document, type Job, type Profile } from "../lib/db";
+import { serializeDocument } from "../lib/serialize";
 import { uploadObject, downloadObject, newObjectKey } from "../lib/objectStore";
 import {
   buildResumeDocx,
@@ -41,7 +42,7 @@ router.get("/jobs/:id/documents", async (req, res): Promise<void> => {
     .from(documentsTable)
     .where(eq(documentsTable.jobId, jobId))
     .orderBy(documentsTable.createdAt, documentsTable.id);
-  res.json(documents.reverse());
+  res.json(documents.reverse().map(serializeDocument));
 });
 
 // Cover-letter / resume document generation now happens via the tailoring and

@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Response } from "express";
 import { db, eq, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job } from "../lib/db";
+import { serializeDocument } from "../lib/serialize";
 import { aiErrorResponse } from "../lib/anthropic";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
@@ -180,7 +181,7 @@ router.post("/jobs/:id/cover-letters/approve", async (req, res): Promise<void> =
     .returning();
 
   req.log.info({ jobId: id }, "Cover letters approved and saved");
-  res.status(201).json({ documents });
+  res.status(201).json({ documents: documents.map(serializeDocument) });
 });
 
 // --- Application questions -----------------------------------------------
