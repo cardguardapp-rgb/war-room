@@ -363,6 +363,7 @@ export const api = {
   documents: {
     list: (jobId: number) => fetchApi<Document[]>(`/jobs/${jobId}/documents`),
     getDownloadUrl: (id: number, format: "docx" | "pdf") => `${BASE_PATH}/documents/${id}/download/${format}`,
+    regenerate: (id: number) => fetchApi<Document>(`/documents/${id}/regenerate`, { method: "POST" }),
   },
   discover: {
     getSettings: () => fetchApi<DiscoverSettings>("/discover/settings"),

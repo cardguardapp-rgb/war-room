@@ -190,6 +190,16 @@ export function useDocuments(jobId: number) {
   });
 }
 
+export function useRegenerateDocument(jobId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.documents.regenerate(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.documents(jobId) });
+    },
+  });
+}
+
 // Cover letters
 export function useCoverLetterStart() {
   return useMutation({ mutationFn: (id: number) => api.jobs.coverLetterStart(id) });

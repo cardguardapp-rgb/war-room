@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { useJob, useUpdateJob, useDeleteJob, useDocuments } from "@/hooks/use-api";
+import { useJob, useUpdateJob, useDeleteJob, useDocuments, useRegenerateDocument } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -22,6 +22,7 @@ import {
   Download,
   MoreVertical,
   MapPin,
+  RefreshCw,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
@@ -70,6 +71,7 @@ export default function JobDetail() {
 
   const updateJob = useUpdateJob();
   const deleteJob = useDeleteJob();
+  const regenerateDocument = useRegenerateDocument(jobId);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -258,6 +260,23 @@ export default function JobDetail() {
                             <a href={api.documents.getDownloadUrl(doc.id, "pdf")}>
                               <Download className="w-4 h-4 mr-1.5" /> PDF
                             </a>
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-lg shrink-0"
+                            title="Regenerate file (re-render with the latest formatting)"
+                            disabled={regenerateDocument.isPending}
+                            onClick={() => {
+                              regenerateDocument.mutate(doc.id, {
+                                onSuccess: () => toast.success("Ready to re-download with updated formatting."),
+                                onError: () => toast.error("Couldn't regenerate that file. Please try again."),
+                              });
+                            }}
+                          >
+                            <RefreshCw
+                              className={`w-4 h-4 ${regenerateDocument.isPending && regenerateDocument.variables === doc.id ? "animate-spin" : ""}`}
+                            />
                           </Button>
                         </div>
                       )}
