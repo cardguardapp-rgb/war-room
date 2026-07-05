@@ -3,3 +3,4 @@
 - [E2E testing behind a PIN/secret gate](e2e-testing-secret-gated-auth.md) — test tools can't read env secrets; use a NODE_ENV-gated dev bypass and always remove it before finishing.
 - [Autoscale deployments have ephemeral disk](autoscale-ephemeral-disk.md) — never store durable data (SQLite files, uploaded files) on local disk in an autoscale-deployed app; use managed Postgres + Object Storage instead.
 - [ORM migration field casing mismatches](orm-migration-field-casing.md) — raw ORM rows use camelCase; audit ALL sibling route files for snake_case serializers, not just the one you're editing.
+- [Resume doc generation has two paths](resume-doc-generation-paths.md) — docx (LibreOffice→PDF) and pdf-lib fallback are separate renderers; layout fixes need both.

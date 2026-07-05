@@ -45,10 +45,16 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
   const para = (children: TextRun[], opts?: IParagraphOptions): Paragraph =>
     new Paragraph({ children, ...opts });
 
+  // Section headings are marked `keepNext` so Word never leaves a heading
+  // orphaned at the bottom of a page with its content pushed to the next —
+  // if it doesn't fit with what follows, the whole heading+content moves
+  // together to a fresh page.
   const headingPara = (text: string): Paragraph =>
     new Paragraph({
       children: [runFor(text.toUpperCase(), el.sectionHeading, 13, el.sectionHeading?.bold ?? true)],
-      spacing: { before: 200, after: 60 },
+      spacing: { before: 320, after: 120 },
+      keepNext: true,
+      keepLines: true,
       border: {
         bottom: {
           color: hex(el.sectionHeading?.color) ?? "999999",
@@ -59,10 +65,12 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
       },
     });
 
-  const bulletPara = (text: string): Paragraph =>
+  const bulletPara = (text: string, opts?: IParagraphOptions): Paragraph =>
     para([runFor(`•  ${text}`, el.bullet, 11)], {
-      spacing: { after: 40 },
+      spacing: { after: 80 },
       indent: { left: 260, hanging: 180 },
+      keepLines: true,
+      ...opts,
     });
 
   const children: Paragraph[] = [];
@@ -71,12 +79,17 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
     switch (sec.kind) {
       case "contact": {
         if (sec.name) {
-          children.push(para([runFor(sec.name, el.name, 22, el.name?.bold ?? true)], { spacing: { after: 40 } }));
+          children.push(
+            para([runFor(sec.name, el.name, 22, el.name?.bold ?? true)], {
+              spacing: { after: 60 },
+              keepNext: true,
+            }),
+          );
         }
         const contact = [sec.email, sec.phone, sec.location, ...sec.links, ...sec.otherLines]
           .filter(Boolean)
           .join("   |   ");
-        if (contact) children.push(para([runFor(contact, el.body, 11)], { spacing: { after: 160 } }));
+        if (contact) children.push(para([runFor(contact, el.body, 11)], { spacing: { after: 240 } }));
         break;
       }
       case "summary": {
@@ -84,7 +97,8 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
         sec.paragraphs.forEach((p, i) =>
           children.push(
             para([runFor(p, el.body, 11)], {
-              spacing: { after: i === sec.paragraphs.length - 1 ? 160 : 100 },
+              spacing: { after: i === sec.paragraphs.length - 1 ? 240 : 140 },
+              keepLines: true,
             }),
           ),
         );
@@ -93,44 +107,77 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
       case "experience": {
         children.push(headingPara(sec.heading || "Experience"));
         sec.items.forEach((it, idx) => {
+          const entryParas: Paragraph[] = [];
           const titleText = [it.title, it.company].filter(Boolean).join("  —  ");
           if (titleText)
-            children.push(
+            entryParas.push(
               para([runFor(titleText, el.jobTitle, 12, el.jobTitle?.bold ?? true)], {
-                spacing: { before: idx === 0 ? 40 : 160, after: 0 },
+                spacing: { before: idx === 0 ? 60 : 220, after: 20 },
+                keepNext: true,
+                keepLines: true,
               }),
             );
           const meta = [it.dates, it.location].filter(Boolean).join("   ·   ");
-          if (meta) children.push(para([runFor(meta, el.body, 10)], { spacing: { after: 40 } }));
-          it.bullets.forEach((b) => children.push(bulletPara(b)));
+          if (meta)
+            entryParas.push(
+              para([runFor(meta, el.body, 10)], {
+                spacing: { after: 80 },
+                keepNext: it.bullets.length > 0,
+                keepLines: true,
+              }),
+            );
+          it.bullets.forEach((b, bIdx) =>
+            entryParas.push(bulletPara(b, { keepNext: bIdx < it.bullets.length - 1 })),
+          );
+          children.push(...entryParas);
         });
         break;
       }
       case "education": {
         children.push(headingPara(sec.heading || "Education"));
         sec.items.forEach((it, idx) => {
+          const entryParas: Paragraph[] = [];
           const line = [it.institution, it.qualification].filter(Boolean).join("  —  ");
           if (line)
-            children.push(
+            entryParas.push(
               para([runFor(line, el.jobTitle, 12, true)], {
-                spacing: { before: idx === 0 ? 40 : 160, after: 0 },
+                spacing: { before: idx === 0 ? 60 : 220, after: 20 },
+                keepNext: true,
+                keepLines: true,
               }),
             );
           const meta = [it.dates, it.location].filter(Boolean).join("   ·   ");
-          if (meta) children.push(para([runFor(meta, el.body, 10)], { spacing: { after: 40 } }));
-          it.details.forEach((d) => children.push(bulletPara(d)));
+          if (meta)
+            entryParas.push(
+              para([runFor(meta, el.body, 10)], {
+                spacing: { after: 80 },
+                keepNext: it.details.length > 0,
+                keepLines: true,
+              }),
+            );
+          it.details.forEach((d, dIdx) =>
+            entryParas.push(bulletPara(d, { keepNext: dIdx < it.details.length - 1 })),
+          );
+          children.push(...entryParas);
         });
         break;
       }
       case "skills": {
         children.push(headingPara(sec.heading || "Skills"));
         if (sec.items.length)
-          children.push(para([runFor(sec.items.join("   •   "), el.body, 11)], { spacing: { after: 160 } }));
+          children.push(
+            para([runFor(sec.items.join("   •   "), el.body, 11)], {
+              spacing: { after: 240 },
+              keepLines: true,
+            }),
+          );
         break;
       }
       case "other": {
         children.push(headingPara(sec.heading || "Other"));
-        sec.paragraphs.forEach((p) => children.push(para([runFor(p, el.body, 11)], { spacing: { after: 80 } })));
+        sec.paragraphs.forEach((p) =>
+          children.push(para([runFor(p, el.body, 11)], { spacing: { after: 120 }, keepLines: true })),
+        );
         sec.bullets.forEach((b) => children.push(bulletPara(b)));
         break;
       }
