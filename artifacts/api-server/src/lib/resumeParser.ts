@@ -300,7 +300,13 @@ function buildPara(p: XmlNode, resolver: StyleResolver): Para {
   for (const r of runs) {
     const rt = runText(r);
     text += rt;
-    if (firstMeaningful === undefined && rt.trim().length > 0) {
+    const trimmed = rt.trim();
+    // Skip runs that are purely a bullet glyph/tab (some templates put the
+    // "•" character in its own run with different formatting, e.g. bold, to
+    // make the marker stand out). Sampling that run's style would wrongly
+    // apply its formatting (bold) to the whole bullet line's text.
+    const isGlyphOnly = trimmed.length > 0 && BULLET_GLYPHS.test(`${trimmed} `);
+    if (firstMeaningful === undefined && trimmed.length > 0 && !isGlyphOnly) {
       firstMeaningful = mergeRpr(paraRpr, parseRpr(r["w:rPr"]));
     }
   }
