@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, eq, documentsTable, jobsTable, profileTable, type Document, type Job, type Profile } from "../lib/db";
 import { serializeDocument } from "../lib/serialize";
-import { uploadObject, downloadObject, newObjectKey } from "../lib/objectStore";
+import { uploadObject, downloadObject, deleteObject, newObjectKey } from "../lib/objectStore";
 import {
   buildResumeDocx,
   buildCoverLetterDocx,
@@ -52,6 +52,46 @@ router.post("/jobs/:id/documents/generate", (_req, res): void => {
     status: "not_implemented",
     message: "Use the tailoring / cover-letter flows to create documents.",
   });
+});
+
+/**
+ * Force a document's cached .docx/.pdf to be rebuilt on the next download.
+ * Clears the stored object keys (and best-effort deletes the stale objects)
+ * so the next `/download/:format` call re-renders from the current
+ * content_json + style map instead of serving the old cached file.
+ */
+router.post("/documents/:id/regenerate", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid document id" });
+    return;
+  }
+
+  const [doc] = await db.select().from(documentsTable).where(eq(documentsTable.id, id));
+  if (!doc) {
+    res.status(404).json({ error: "Document not found" });
+    return;
+  }
+  if (doc.type !== "resume" && doc.type !== "cover_letter") {
+    res.status(400).json({
+      error: "Only the resume and full cover letter can be regenerated.",
+    });
+    return;
+  }
+
+  const staleKeys = [doc.docxObjectKey, doc.pdfObjectKey].filter((k): k is string => Boolean(k));
+  await db
+    .update(documentsTable)
+    .set({ docxObjectKey: null, pdfObjectKey: null })
+    .where(eq(documentsTable.id, doc.id));
+
+  await Promise.all(
+    staleKeys.map((key) =>
+      deleteObject(key).catch((err) => req.log.warn({ err, key }, "Failed to delete stale document object")),
+    ),
+  );
+
+  res.json(serializeDocument({ ...doc, docxObjectKey: null, pdfObjectKey: null }));
 });
 
 /**
