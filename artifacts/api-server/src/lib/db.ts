@@ -19,6 +19,7 @@ db.exec(`
     resume_json TEXT,
     style_map_json TEXT,
     extra_answers_json TEXT,
+    extra_context TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -79,6 +80,7 @@ function ensureColumn(table: string, column: string, definition: string): void {
 
 ensureColumn("jobs", "location", "TEXT");
 ensureColumn("jobs", "work_arrangement", "TEXT");
+ensureColumn("profile", "extra_context", "TEXT");
 
 logger.info({ dbPath }, "SQLite database ready");
 
@@ -88,6 +90,7 @@ export interface ProfileRow {
   resume_json: string | null;
   style_map_json: string | null;
   extra_answers_json: string | null;
+  extra_context: string | null;
   updated_at: string;
 }
 

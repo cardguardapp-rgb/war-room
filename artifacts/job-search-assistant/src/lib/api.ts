@@ -296,6 +296,7 @@ export interface Profile {
   resume_json: ResumeJson | null;
   style_map_json: StyleMap | null;
   extra_answers_json: ExtraAnswer[] | null;
+  extra_context: string | null;
   updated_at: string;
 }
 
@@ -307,7 +308,7 @@ export const api = {
   },
   profile: {
     get: () => fetchApi<Profile | null>("/profile"),
-    update: (data: Partial<Pick<Profile, 'resume_json' | 'style_map_json' | 'extra_answers_json'>>) =>
+    update: (data: Partial<Pick<Profile, 'resume_json' | 'style_map_json' | 'extra_answers_json' | 'extra_context'>>) =>
       fetchApi<Profile>("/profile", { method: "PATCH", body: JSON.stringify(data) }),
     // Upload + parse, WITHOUT committing. Returns the structure for review.
     parseResume: (file: File) => {

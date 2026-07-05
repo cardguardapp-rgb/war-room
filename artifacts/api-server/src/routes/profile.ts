@@ -76,6 +76,7 @@ function serializeProfile(row: ProfileRow | undefined | null) {
     resume_json: parse(row.resume_json),
     style_map_json: parse(row.style_map_json),
     extra_answers_json: parse(row.extra_answers_json),
+    extra_context: row.extra_context ?? null,
   };
 }
 
@@ -122,7 +123,13 @@ router.get("/profile", (_req, res): void => {
 });
 
 router.patch("/profile", (req, res): void => {
-  const { resume_json, style_map_json, extra_answers_json } = req.body ?? {};
+  const { resume_json, style_map_json, extra_answers_json, extra_context } =
+    req.body ?? {};
+
+  if (extra_context !== undefined && typeof extra_context !== "string" && extra_context !== null) {
+    res.status(400).json({ error: "extra_context must be a string" });
+    return;
+  }
 
   ensureProfileRow();
 
@@ -131,12 +138,15 @@ router.patch("/profile", (req, res): void => {
      SET resume_json = COALESCE(?, resume_json),
          style_map_json = COALESCE(?, style_map_json),
          extra_answers_json = COALESCE(?, extra_answers_json),
+         extra_context = CASE WHEN ? THEN ? ELSE extra_context END,
          updated_at = datetime('now')
      WHERE id = 1`,
   ).run(
     resume_json != null ? JSON.stringify(resume_json) : null,
     style_map_json != null ? JSON.stringify(style_map_json) : null,
     extra_answers_json != null ? JSON.stringify(extra_answers_json) : null,
+    extra_context !== undefined ? 1 : 0,
+    extra_context ?? null,
   );
 
   res.json(serializeProfile(getProfile()));

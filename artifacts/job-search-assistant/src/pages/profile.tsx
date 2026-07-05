@@ -38,6 +38,7 @@ import {
 } from "@/lib/api";
 import { ResumeReview } from "@/components/profile/ResumeReview";
 import { ExtraAnswers } from "@/components/profile/ExtraAnswers";
+import { AdditionalContext } from "@/components/profile/AdditionalContext";
 import { SECTION_KIND_LABELS } from "@/components/profile/resumeDraft";
 
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -142,6 +143,17 @@ export default function Profile() {
         onSuccess: () => toast.success("Answers saved"),
         onError: (err) =>
           toast.error("Couldn't save answers", { description: err.message }),
+      },
+    );
+  };
+
+  const handleSaveContext = (text: string) => {
+    updateProfile.mutate(
+      { extra_context: text },
+      {
+        onSuccess: () => toast.success("Additional context saved"),
+        onError: (err) =>
+          toast.error("Couldn't save context", { description: err.message }),
       },
     );
   };
@@ -301,6 +313,13 @@ export default function Profile() {
       <ExtraAnswers
         value={profile?.extra_answers_json ?? null}
         onSave={handleSaveAnswers}
+        saving={updateProfile.isPending}
+      />
+
+      {/* Additional context */}
+      <AdditionalContext
+        value={profile?.extra_context ?? null}
+        onSave={handleSaveContext}
         saving={updateProfile.isPending}
       />
 
