@@ -1,11 +1,9 @@
 // Non-AI smoke test for the polish phase: JSON parse-retry + export zip.
+// Run: pnpm --filter @workspace/api-server exec tsx test/polishTest.ts
 import assert from "node:assert";
-import fs from "node:fs";
-import path from "node:path";
 import JSZip from "jszip";
 import { parseJsonWithRetry, AiJsonError } from "../src/lib/anthropic";
-import { db } from "../src/lib/db";
-import { dataDir } from "../src/lib/paths";
+import { db, profileTable, jobsTable, documentsTable, qaLogTable } from "../src/lib/db";
 
 async function main() {
   // 1. Retries once on malformed JSON, then succeeds.
@@ -40,35 +38,26 @@ async function main() {
   assert.strictEqual(calls, 2, "should try exactly twice before giving up");
   console.log("OK  parseJsonWithRetry throws AiJsonError after two failures");
 
-  // 4. Export zip mechanism: sqlite backup + data.json + round-trip.
-  const tmpDb = path.join(dataDir, `polishtest-${Date.now()}.db`);
-  try {
-    await db.backup(tmpDb);
-    const zip = new JSZip();
-    zip.file("app.db", fs.readFileSync(tmpDb));
-    const dump: Record<string, unknown> = {};
-    for (const t of ["profile", "jobs", "documents", "qa_log"]) {
-      dump[t] = db.prepare(`SELECT * FROM ${t}`).all();
-    }
-    zip.file("data.json", JSON.stringify(dump, null, 2));
-    const buf = await zip.generateAsync({ type: "nodebuffer" });
-    assert.ok(buf.length > 0, "zip should have bytes");
+  // 4. Export zip mechanism: table dump (Postgres via Drizzle) + data.json round-trip.
+  const [profile, jobs, documents, qaLog] = await Promise.all([
+    db.select().from(profileTable),
+    db.select().from(jobsTable),
+    db.select().from(documentsTable),
+    db.select().from(qaLogTable),
+  ]);
+  const zip = new JSZip();
+  const dump = { profile, jobs, documents, qa_log: qaLog };
+  zip.file("data.json", JSON.stringify(dump, null, 2));
+  const buf = await zip.generateAsync({ type: "nodebuffer" });
+  assert.ok(buf.length > 0, "zip should have bytes");
 
-    const reloaded = await JSZip.loadAsync(buf);
-    assert.ok(reloaded.file("app.db"), "app.db missing from zip");
-    const dataJson = await reloaded.file("data.json")!.async("string");
-    JSON.parse(dataJson); // must be valid JSON
-    assert.ok(reloaded.file("app.db")!, "app.db entry present");
-    console.log(`OK  export zip builds + round-trips (${buf.length} bytes)`);
-  } finally {
-    try {
-      fs.rmSync(tmpDb, { force: true });
-    } catch {
-      /* ignore */
-    }
-  }
+  const reloaded = await JSZip.loadAsync(buf);
+  const dataJson = await reloaded.file("data.json")!.async("string");
+  JSON.parse(dataJson); // must be valid JSON
+  console.log(`OK  export zip builds + round-trips (${buf.length} bytes)`);
 
   console.log("\nALL POLISH NON-AI CHECKS PASSED");
+  process.exit(0);
 }
 
 main().catch((err) => {

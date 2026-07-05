@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Response } from "express";
-import { db, type DocumentRow, type JobRow, type ProfileRow } from "../lib/db";
+import { db, eq, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job } from "../lib/db";
 import { aiErrorResponse } from "../lib/anthropic";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
@@ -14,39 +14,34 @@ function parseId(raw: unknown): number | null {
   return Number.isNaN(id) ? null : id;
 }
 
-function parseJson<T>(value: string | null): T | null {
-  if (value == null) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-}
-
 /** Load posting + the best available resume (latest approved tailored, else base) + extra answers. */
-function loadGenContext(
+async function loadGenContext(
   id: number,
   res: Response,
-): { job: JobRow; resumeJson: ResumeJson; extraAnswers: unknown } | null {
-  const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as JobRow | undefined;
+): Promise<{ job: Job; resumeJson: ResumeJson; extraAnswers: unknown } | null> {
+  const [job] = await db.select().from(jobsTable).where(eq(jobsTable.id, id));
   if (!job) {
     res.status(404).json({ error: "Job not found" });
     return null;
   }
-  if (!job.posting_text || job.posting_text.trim().length === 0) {
+  if (!job.postingText || job.postingText.trim().length === 0) {
     res.status(400).json({ error: "This job has no posting text. Add the posting first." });
     return null;
   }
-  const profile = db.prepare("SELECT * FROM profile WHERE id = 1").get() as ProfileRow | undefined;
+  const [profile] = await db.select().from(profileTable).where(eq(profileTable.id, 1));
 
   // Prefer the latest approved tailored resume for this job.
-  const latestResumeDoc = db
-    .prepare(
-      "SELECT * FROM documents WHERE job_id = ? AND type = 'resume' ORDER BY created_at DESC, id DESC LIMIT 1",
-    )
-    .get(id) as DocumentRow | undefined;
-  const tailored = latestResumeDoc ? parseJson<ResumeJson>(latestResumeDoc.content_json) : null;
-  const base = parseJson<ResumeJson>(profile?.resume_json ?? null);
+  const [latestResumeDoc] = await db
+    .select()
+    .from(documentsTable)
+    .where(eq(documentsTable.jobId, id))
+    .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id))
+    .limit(1);
+  const tailored =
+    latestResumeDoc?.type === "resume"
+      ? (latestResumeDoc.contentJson as ResumeJson | null)
+      : null;
+  const base = (profile?.resumeJson as ResumeJson | null) ?? null;
   const resumeJson = tailored && Array.isArray(tailored.sections) ? tailored : base;
 
   if (!resumeJson || !Array.isArray(resumeJson.sections)) {
@@ -55,7 +50,7 @@ function loadGenContext(
     });
     return null;
   }
-  const extraAnswers = parseJson<unknown>(profile?.extra_answers_json ?? null) ?? [];
+  const extraAnswers = profile?.extraAnswersJson ?? [];
   return { job, resumeJson, extraAnswers };
 }
 
@@ -77,12 +72,12 @@ router.post("/jobs/:id/cover-letters", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const ctx = loadGenContext(id, res);
+  const ctx = await loadGenContext(id, res);
   if (!ctx) return;
   try {
     const result = await runCoverLetters({
       mode: "initial",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
     });
@@ -100,13 +95,13 @@ router.post("/jobs/:id/cover-letters/finalize", async (req, res): Promise<void> 
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const ctx = loadGenContext(id, res);
+  const ctx = await loadGenContext(id, res);
   if (!ctx) return;
   const { answers, current } = req.body ?? {};
   try {
     const result = await runCoverLetters({
       mode: "finalize",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
       answers: toQaPairs(answers),
@@ -126,7 +121,7 @@ router.post("/jobs/:id/cover-letters/revise", async (req, res): Promise<void> =>
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const ctx = loadGenContext(id, res);
+  const ctx = await loadGenContext(id, res);
   if (!ctx) return;
   const { current, edit_request } = req.body ?? {};
   if (typeof edit_request !== "string" || edit_request.trim().length === 0) {
@@ -136,7 +131,7 @@ router.post("/jobs/:id/cover-letters/revise", async (req, res): Promise<void> =>
   try {
     const result = await runCoverLetters({
       mode: "revise",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
       editRequest: edit_request.trim(),
@@ -150,13 +145,14 @@ router.post("/jobs/:id/cover-letters/revise", async (req, res): Promise<void> =>
   }
 });
 
-router.post("/jobs/:id/cover-letters/approve", (req, res): void => {
+router.post("/jobs/:id/cover-letters/approve", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  if (!db.prepare("SELECT id FROM jobs WHERE id = ?").get(id)) {
+  const [job] = await db.select({ id: jobsTable.id }).from(jobsTable).where(eq(jobsTable.id, id));
+  if (!job) {
     res.status(404).json({ error: "Job not found" });
     return;
   }
@@ -166,29 +162,22 @@ router.post("/jobs/:id/cover-letters/approve", (req, res): void => {
     return;
   }
 
-  const insert = db.prepare(
-    "INSERT INTO documents (job_id, type, content_json) VALUES (?, ?, ?)",
-  );
-  const fullDoc = insert.run(
-    id,
-    "cover_letter",
-    JSON.stringify({
-      salutation: String(full.salutation ?? "Dear Hiring Manager"),
-      re: String(full.re ?? ""),
-      body: String(full.body),
-    }),
-  );
-  const plainDoc = insert.run(id, "cover_letter_plain", JSON.stringify({ text: String(full.body) }));
-  const noteDoc = insert.run(
-    id,
-    "cover_note",
-    JSON.stringify({ text: String(short ?? "") }),
-  );
-
-  const ids = [fullDoc, plainDoc, noteDoc].map((r) => Number(r.lastInsertRowid));
-  const documents = db
-    .prepare(`SELECT * FROM documents WHERE id IN (${ids.map(() => "?").join(",")})`)
-    .all(...ids);
+  const documents = await db
+    .insert(documentsTable)
+    .values([
+      {
+        jobId: id,
+        type: "cover_letter",
+        contentJson: {
+          salutation: String(full.salutation ?? "Dear Hiring Manager"),
+          re: String(full.re ?? ""),
+          body: String(full.body),
+        },
+      },
+      { jobId: id, type: "cover_letter_plain", contentJson: { text: String(full.body) } },
+      { jobId: id, type: "cover_note", contentJson: { text: String(short ?? "") } },
+    ])
+    .returning();
 
   req.log.info({ jobId: id }, "Cover letters approved and saved");
   res.status(201).json({ documents });
@@ -207,12 +196,12 @@ router.post("/jobs/:id/questions", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Paste at least one application question." });
     return;
   }
-  const ctx = loadGenContext(id, res);
+  const ctx = await loadGenContext(id, res);
   if (!ctx) return;
   try {
     const result = await runAppQuestions({
       mode: "initial",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
       questions,
@@ -236,12 +225,12 @@ router.post("/jobs/:id/questions/finalize", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Missing the application questions." });
     return;
   }
-  const ctx = loadGenContext(id, res);
+  const ctx = await loadGenContext(id, res);
   if (!ctx) return;
   try {
     const result = await runAppQuestions({
       mode: "finalize",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
       questions,
@@ -256,13 +245,14 @@ router.post("/jobs/:id/questions/finalize", async (req, res): Promise<void> => {
 });
 
 // Save drafted application answers to qa_log.
-router.post("/jobs/:id/questions/save", (req, res): void => {
+router.post("/jobs/:id/questions/save", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  if (!db.prepare("SELECT id FROM jobs WHERE id = ?").get(id)) {
+  const [job] = await db.select({ id: jobsTable.id }).from(jobsTable).where(eq(jobsTable.id, id));
+  if (!job) {
     res.status(404).json({ error: "Job not found" });
     return;
   }
@@ -271,11 +261,7 @@ router.post("/jobs/:id/questions/save", (req, res): void => {
     res.status(400).json({ error: "Nothing to save." });
     return;
   }
-  const insert = db.prepare("INSERT INTO qa_log (job_id, question, answer) VALUES (?, ?, ?)");
-  const tx = db.transaction((rows: QaPair[]) => {
-    for (const r of rows) insert.run(id, r.question, r.answer);
-  });
-  tx(pairs);
+  await db.insert(qaLogTable).values(pairs.map((r) => ({ jobId: id, question: r.question, answer: r.answer })));
   req.log.info({ jobId: id, count: pairs.length }, "Application answers saved to qa_log");
   res.status(201).json({ saved: pairs.length });
 });

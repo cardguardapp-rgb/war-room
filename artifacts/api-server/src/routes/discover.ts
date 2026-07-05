@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, type DiscoverSettingsRow } from "../lib/db";
+import { db, eq, discoverSettingsTable, discoverDismissedTable } from "../lib/db";
 import { aiErrorResponse } from "../lib/anthropic";
 import {
   DEFAULT_DISCOVER_SETTINGS,
@@ -11,30 +11,31 @@ import { TavilyConfigError, TavilyRequestError } from "../lib/tavily";
 
 const router: IRouter = Router();
 
-function loadSettings(): DiscoverSettings {
-  const row = db
-    .prepare("SELECT * FROM discover_settings WHERE id = 1")
-    .get() as DiscoverSettingsRow | undefined;
-  if (!row?.settings_json) return DEFAULT_DISCOVER_SETTINGS;
+async function loadSettings(): Promise<DiscoverSettings> {
+  const [row] = await db
+    .select()
+    .from(discoverSettingsTable)
+    .where(eq(discoverSettingsTable.id, 1));
+  if (!row?.settingsJson) return DEFAULT_DISCOVER_SETTINGS;
   try {
-    return normaliseSettings(JSON.parse(row.settings_json));
+    return normaliseSettings(row.settingsJson);
   } catch {
     return DEFAULT_DISCOVER_SETTINGS;
   }
 }
 
-function saveSettings(settings: DiscoverSettings): void {
-  db.prepare(
-    `INSERT INTO discover_settings (id, settings_json, updated_at)
-     VALUES (1, ?, datetime('now'))
-     ON CONFLICT(id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = datetime('now')`,
-  ).run(JSON.stringify(settings));
+async function saveSettings(settings: DiscoverSettings): Promise<void> {
+  await db
+    .insert(discoverSettingsTable)
+    .values({ id: 1, settingsJson: settings, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: discoverSettingsTable.id,
+      set: { settingsJson: settings, updatedAt: new Date() },
+    });
 }
 
-function dismissedSet(): Set<string> {
-  const rows = db.prepare("SELECT url FROM discover_dismissed").all() as {
-    url: string;
-  }[];
+async function dismissedSet(): Promise<Set<string>> {
+  const rows = await db.select({ url: discoverDismissedTable.url }).from(discoverDismissedTable);
   return new Set(rows.map((r) => r.url));
 }
 
@@ -47,13 +48,13 @@ function discoverErrorResponse(err: unknown): { status: number; error: string } 
 
 // --- Settings -----------------------------------------------------------
 
-router.get("/discover/settings", (_req, res): void => {
-  res.json(loadSettings());
+router.get("/discover/settings", async (_req, res): Promise<void> => {
+  res.json(await loadSettings());
 });
 
-router.put("/discover/settings", (req, res): void => {
+router.put("/discover/settings", async (req, res): Promise<void> => {
   const settings = normaliseSettings(req.body);
-  saveSettings(settings);
+  await saveSettings(settings);
   res.json(settings);
 });
 
@@ -64,9 +65,9 @@ router.post("/discover/search", async (req, res): Promise<void> => {
   const settings =
     req.body && typeof req.body === "object" && Object.keys(req.body).length > 0
       ? normaliseSettings(req.body)
-      : loadSettings();
+      : await loadSettings();
 
-  const dismissed = dismissedSet();
+  const dismissed = await dismissedSet();
 
   try {
     const run = await runDiscover(settings, (url) => dismissed.has(url));
@@ -84,15 +85,13 @@ router.post("/discover/search", async (req, res): Promise<void> => {
 
 // --- Dismiss ------------------------------------------------------------
 
-router.post("/discover/dismiss", (req, res): void => {
+router.post("/discover/dismiss", async (req, res): Promise<void> => {
   const { url } = req.body ?? {};
   if (typeof url !== "string" || url.trim().length === 0) {
     res.status(400).json({ error: "A url is required" });
     return;
   }
-  db.prepare(
-    "INSERT OR IGNORE INTO discover_dismissed (url) VALUES (?)",
-  ).run(url.trim());
+  await db.insert(discoverDismissedTable).values({ url: url.trim() }).onConflictDoNothing();
   res.status(201).json({ dismissed: true });
 });
 

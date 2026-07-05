@@ -1,3 +1,4 @@
 - [Wouter custom routing pitfalls](wouter-custom-routing.md) — manual `location.startsWith()` routing breaks `useParams()`; use `<Switch>/<Route>`.
 - [shadcn sonner Toaster needs no next-themes](shadcn-sonner-toaster.md) — sonner's Toaster crashes with an unhandled useContext error if `next-themes` has no ThemeProvider wrapping it.
 - [E2E testing behind a PIN/secret gate](e2e-testing-secret-gated-auth.md) — test tools can't read env secrets; use a NODE_ENV-gated dev bypass and always remove it before finishing.
+- [Autoscale deployments have ephemeral disk](autoscale-ephemeral-disk.md) — never store durable data (SQLite files, uploaded files) on local disk in an autoscale-deployed app; use managed Postgres + Object Storage instead.

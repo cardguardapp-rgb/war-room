@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, type JobRow, type ProfileRow } from "../lib/db";
+import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job, type Profile } from "../lib/db";
 import { aiErrorResponse } from "../lib/anthropic";
 import { extractFromText, extractFromUrl } from "../lib/jobExtract";
 import { runTailor, type QaPair } from "../lib/tailor";
@@ -17,37 +17,24 @@ function parseId(raw: unknown): number | null {
   return Number.isNaN(id) ? null : id;
 }
 
-function getJob(id: number): JobRow | undefined {
-  return db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as
-    | JobRow
-    | undefined;
+async function getJob(id: number): Promise<Job | undefined> {
+  const [row] = await db.select().from(jobsTable).where(eq(jobsTable.id, id));
+  return row;
 }
 
-function getProfileRow(): ProfileRow | undefined {
-  return db.prepare("SELECT * FROM profile WHERE id = 1").get() as
-    | ProfileRow
-    | undefined;
-}
-
-function parseJson<T>(value: string | null): T | null {
-  if (value == null) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
+async function getProfileRow(): Promise<Profile | undefined> {
+  const [row] = await db.select().from(profileTable).where(eq(profileTable.id, 1));
+  return row;
 }
 
 // --- CRUD ---------------------------------------------------------------
 
-router.get("/jobs", (_req, res): void => {
-  const jobs = db
-    .prepare("SELECT * FROM jobs ORDER BY created_at DESC, id DESC")
-    .all() as JobRow[];
+router.get("/jobs", async (_req, res): Promise<void> => {
+  const jobs = await db.select().from(jobsTable).orderBy(desc(jobsTable.createdAt), desc(jobsTable.id));
   res.json(jobs);
 });
 
-router.post("/jobs", (req, res): void => {
+router.post("/jobs", async (req, res): Promise<void> => {
   const { title, company, location, work_arrangement, source_url, posting_text } =
     req.body ?? {};
 
@@ -61,30 +48,29 @@ router.post("/jobs", (req, res): void => {
       ? work_arrangement
       : null;
 
-  const result = db
-    .prepare(
-      `INSERT INTO jobs (title, company, location, work_arrangement, source_url, posting_text, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'New')`,
-    )
-    .run(
-      title.trim(),
-      company ?? null,
-      location ?? null,
-      wa,
-      source_url ?? null,
-      posting_text ?? null,
-    );
+  const [row] = await db
+    .insert(jobsTable)
+    .values({
+      title: title.trim(),
+      company: company ?? null,
+      location: location ?? null,
+      workArrangement: wa,
+      sourceUrl: source_url ?? null,
+      postingText: posting_text ?? null,
+      status: "New",
+    })
+    .returning();
 
-  res.status(201).json(getJob(Number(result.lastInsertRowid)));
+  res.status(201).json(row);
 });
 
-router.get("/jobs/:id", (req, res): void => {
+router.get("/jobs/:id", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const job = getJob(id);
+  const job = await getJob(id);
   if (!job) {
     res.status(404).json({ error: "Job not found" });
     return;
@@ -92,7 +78,7 @@ router.get("/jobs/:id", (req, res): void => {
   res.json(job);
 });
 
-router.patch("/jobs/:id", (req, res): void => {
+router.patch("/jobs/:id", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
@@ -115,43 +101,35 @@ router.patch("/jobs/:id", (req, res): void => {
     return;
   }
 
-  if (!getJob(id)) {
+  if (!(await getJob(id))) {
     res.status(404).json({ error: "Job not found" });
     return;
   }
 
-  db.prepare(
-    `UPDATE jobs
-     SET title = COALESCE(?, title),
-         company = COALESCE(?, company),
-         location = COALESCE(?, location),
-         work_arrangement = COALESCE(?, work_arrangement),
-         source_url = COALESCE(?, source_url),
-         posting_text = COALESCE(?, posting_text),
-         status = COALESCE(?, status)
-     WHERE id = ?`,
-  ).run(
-    title ?? null,
-    company ?? null,
-    location ?? null,
-    work_arrangement ?? null,
-    source_url ?? null,
-    posting_text ?? null,
-    status ?? null,
-    id,
-  );
+  const updates: Partial<typeof jobsTable.$inferInsert> = {};
+  if (title !== undefined) updates.title = title;
+  if (company !== undefined) updates.company = company;
+  if (location !== undefined) updates.location = location;
+  if (work_arrangement !== undefined) updates.workArrangement = work_arrangement;
+  if (source_url !== undefined) updates.sourceUrl = source_url;
+  if (posting_text !== undefined) updates.postingText = posting_text;
+  if (status !== undefined) updates.status = status;
 
-  res.json(getJob(id));
+  if (Object.keys(updates).length > 0) {
+    await db.update(jobsTable).set(updates).where(eq(jobsTable.id, id));
+  }
+
+  res.json(await getJob(id));
 });
 
-router.delete("/jobs/:id", (req, res): void => {
+router.delete("/jobs/:id", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const result = db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
-  if (result.changes === 0) {
+  const deleted = await db.delete(jobsTable).where(eq(jobsTable.id, id)).returning({ id: jobsTable.id });
+  if (deleted.length === 0) {
     res.status(404).json({ error: "Job not found" });
     return;
   }
@@ -196,32 +174,30 @@ router.post("/jobs/extract", async (req, res): Promise<void> => {
 // --- Tailoring (Part B) -------------------------------------------------
 
 /** Load the pieces every tailoring call needs, or send an error response. */
-function loadTailorContext(
+async function loadTailorContext(
   id: number,
   res: Response,
-):
-  | { job: JobRow; resumeJson: ResumeJson; extraAnswers: unknown }
-  | null {
-  const job = getJob(id);
+): Promise<{ job: Job; resumeJson: ResumeJson; extraAnswers: unknown } | null> {
+  const job = await getJob(id);
   if (!job) {
     res.status(404).json({ error: "Job not found" });
     return null;
   }
-  if (!job.posting_text || job.posting_text.trim().length === 0) {
+  if (!job.postingText || job.postingText.trim().length === 0) {
     res.status(400).json({
       error: "This job has no posting text to tailor against. Add the posting first.",
     });
     return null;
   }
-  const profile = getProfileRow();
-  const resumeJson = parseJson<ResumeJson>(profile?.resume_json ?? null);
+  const profile = await getProfileRow();
+  const resumeJson = (profile?.resumeJson as ResumeJson | null) ?? null;
   if (!resumeJson || !Array.isArray(resumeJson.sections)) {
     res.status(400).json({
       error: "Add and confirm your base resume on the Profile page before tailoring.",
     });
     return null;
   }
-  const extraAnswers = parseJson<unknown>(profile?.extra_answers_json ?? null) ?? [];
+  const extraAnswers = profile?.extraAnswersJson ?? [];
   return { job, resumeJson, extraAnswers };
 }
 
@@ -232,19 +208,20 @@ router.post("/jobs/:id/tailor", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const ctx = loadTailorContext(id, res);
+  const ctx = await loadTailorContext(id, res);
   if (!ctx) return;
 
   try {
     const result = await runTailor({
       mode: "initial",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
     });
-    db.prepare(
-      "UPDATE jobs SET status = 'Tailoring' WHERE id = ? AND status = 'New'",
-    ).run(id);
+    await db
+      .update(jobsTable)
+      .set({ status: "Tailoring" })
+      .where(and(eq(jobsTable.id, id), eq(jobsTable.status, "New")));
     res.json(result);
   } catch (err) {
     const mapped = aiErrorResponse(err);
@@ -254,7 +231,7 @@ router.post("/jobs/:id/tailor", async (req, res): Promise<void> => {
 });
 
 // Record a clarifying-question answer: qa_log + append to extra_answers_json.
-router.post("/jobs/:id/qa", (req, res): void => {
+router.post("/jobs/:id/qa", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
@@ -269,31 +246,31 @@ router.post("/jobs/:id/qa", (req, res): void => {
     res.status(400).json({ error: "An answer is required" });
     return;
   }
-  if (!getJob(id)) {
+  if (!(await getJob(id))) {
     res.status(404).json({ error: "Job not found" });
     return;
   }
 
-  db.prepare(
-    "INSERT INTO qa_log (job_id, question, answer) VALUES (?, ?, ?)",
-  ).run(id, question.trim(), answer);
+  await db.insert(qaLogTable).values({ jobId: id, question: question.trim(), answer });
 
-  db.prepare(
-    "INSERT OR IGNORE INTO profile (id, updated_at) VALUES (1, datetime('now'))",
-  ).run();
-  const profile = getProfileRow();
-  const existing = parseJson<{ id: string; question: string; answer: string }[]>(
-    profile?.extra_answers_json ?? null,
-  );
+  await db
+    .insert(profileTable)
+    .values({ id: 1 })
+    .onConflictDoNothing({ target: profileTable.id });
+  const profile = await getProfileRow();
+  const existing = profile?.extraAnswersJson as
+    | { id: string; question: string; answer: string }[]
+    | null;
   const answers = Array.isArray(existing) ? existing : [];
   answers.push({
     id: `qa-${crypto.randomUUID()}`,
     question: question.trim(),
     answer,
   });
-  db.prepare(
-    "UPDATE profile SET extra_answers_json = ?, updated_at = datetime('now') WHERE id = 1",
-  ).run(JSON.stringify(answers));
+  await db
+    .update(profileTable)
+    .set({ extraAnswersJson: answers, updatedAt: new Date() })
+    .where(eq(profileTable.id, 1));
 
   res.status(201).json({ extra_answers: answers });
 });
@@ -305,7 +282,7 @@ router.post("/jobs/:id/tailor/finalize", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const ctx = loadTailorContext(id, res);
+  const ctx = await loadTailorContext(id, res);
   if (!ctx) return;
 
   const { answers, current_resume } = req.body ?? {};
@@ -324,7 +301,7 @@ router.post("/jobs/:id/tailor/finalize", async (req, res): Promise<void> => {
   try {
     const result = await runTailor({
       mode: "finalize",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
       answers: answerPairs,
@@ -348,7 +325,7 @@ router.post("/jobs/:id/tailor/revise", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const ctx = loadTailorContext(id, res);
+  const ctx = await loadTailorContext(id, res);
   if (!ctx) return;
 
   const { proposed_resume, edit_request } = req.body ?? {};
@@ -364,7 +341,7 @@ router.post("/jobs/:id/tailor/revise", async (req, res): Promise<void> => {
   try {
     const result = await runTailor({
       mode: "revise",
-      postingText: ctx.job.posting_text!,
+      postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
       editRequest: edit_request.trim(),
@@ -379,13 +356,13 @@ router.post("/jobs/:id/tailor/revise", async (req, res): Promise<void> => {
 });
 
 // Approve — save the tailored resume as a document and mark the job Ready.
-router.post("/jobs/:id/tailor/approve", (req, res): void => {
+router.post("/jobs/:id/tailor/approve", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  if (!getJob(id)) {
+  if (!(await getJob(id))) {
     res.status(404).json({ error: "Job not found" });
     return;
   }
@@ -395,16 +372,11 @@ router.post("/jobs/:id/tailor/approve", (req, res): void => {
     return;
   }
 
-  const result = db
-    .prepare(
-      `INSERT INTO documents (job_id, type, content_json) VALUES (?, 'resume', ?)`,
-    )
-    .run(id, JSON.stringify(proposed_resume));
-  db.prepare("UPDATE jobs SET status = 'Ready' WHERE id = ?").run(id);
-
-  const document = db
-    .prepare("SELECT * FROM documents WHERE id = ?")
-    .get(Number(result.lastInsertRowid));
+  const [document] = await db
+    .insert(documentsTable)
+    .values({ jobId: id, type: "resume", contentJson: proposed_resume })
+    .returning();
+  await db.update(jobsTable).set({ status: "Ready" }).where(eq(jobsTable.id, id));
 
   req.log.info({ jobId: id }, "Tailored resume approved and saved");
   res.status(201).json(document);

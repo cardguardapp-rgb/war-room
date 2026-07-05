@@ -11,12 +11,14 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.109.1",
+    "@google-cloud/storage": "^7.17.1",
     "@mozilla/readability": "^0.6.0",
     "@workspace/api-zod": "workspace:*",
-    "better-sqlite3": "^12.4.1",
+    "@workspace/db": "workspace:*",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "docx": "^9.7.1",
+    "drizzle-orm": "catalog:",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.9.3",
     "jsdom": "^29.1.1",
@@ -28,7 +30,6 @@
     "uuid": "^11.1.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

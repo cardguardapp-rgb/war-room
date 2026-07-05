@@ -1,8 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
 import { Router, type IRouter } from "express";
-import { db, type DocumentRow, type JobRow, type ProfileRow } from "../lib/db";
-import { uploadsDir } from "../lib/paths";
+import { db, eq, documentsTable, jobsTable, profileTable, type Document, type Job, type Profile } from "../lib/db";
+import { uploadObject, downloadObject, newObjectKey } from "../lib/objectStore";
 import {
   buildResumeDocx,
   buildCoverLetterDocx,
@@ -21,37 +19,29 @@ import type { CoverLetterFull } from "../lib/coverLetters";
 
 const router: IRouter = Router();
 
-fs.mkdirSync(uploadsDir, { recursive: true });
-
 function parseId(raw: unknown): number | null {
   const value = Array.isArray(raw) ? raw[0] : raw;
   const id = parseInt(String(value), 10);
   return Number.isNaN(id) ? null : id;
 }
 
-function parseJson<T>(value: string | null): T | null {
-  if (value == null) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-}
-
-router.get("/jobs/:id/documents", (req, res): void => {
+router.get("/jobs/:id/documents", async (req, res): Promise<void> => {
   const jobId = parseId(req.params.id);
   if (jobId === null) {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  if (!db.prepare("SELECT id FROM jobs WHERE id = ?").get(jobId)) {
+  const [job] = await db.select({ id: jobsTable.id }).from(jobsTable).where(eq(jobsTable.id, jobId));
+  if (!job) {
     res.status(404).json({ error: "Job not found" });
     return;
   }
-  const documents = db
-    .prepare("SELECT * FROM documents WHERE job_id = ? ORDER BY created_at DESC, id DESC")
-    .all(jobId) as DocumentRow[];
-  res.json(documents);
+  const documents = await db
+    .select()
+    .from(documentsTable)
+    .where(eq(documentsTable.jobId, jobId))
+    .orderBy(documentsTable.createdAt, documentsTable.id);
+  res.json(documents.reverse());
 });
 
 // Cover-letter / resume document generation now happens via the tailoring and
@@ -66,7 +56,7 @@ router.post("/jobs/:id/documents/generate", (_req, res): void => {
 /**
  * Download a resume or full cover-letter document as .docx or .pdf. Files are
  * built on demand from the stored content_json + the profile style map, cached
- * to disk, and the path recorded on the row.
+ * in object storage, and the key recorded on the row.
  */
 router.get("/documents/:id/download/:format", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
@@ -80,9 +70,7 @@ router.get("/documents/:id/download/:format", async (req, res): Promise<void> =>
     return;
   }
 
-  const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(id) as
-    | DocumentRow
-    | undefined;
+  const [doc] = await db.select().from(documentsTable).where(eq(documentsTable.id, id));
   if (!doc) {
     res.status(404).json({ error: "Document not found" });
     return;
@@ -94,33 +82,45 @@ router.get("/documents/:id/download/:format", async (req, res): Promise<void> =>
     return;
   }
 
-  const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(doc.job_id) as
-    | JobRow
-    | undefined;
-  const profile = db.prepare("SELECT * FROM profile WHERE id = 1").get() as
-    | ProfileRow
-    | undefined;
-  const style = parseJson<StyleMap>(profile?.style_map_json ?? null) ?? defaultStyleMap();
+  const [job] = await db.select().from(jobsTable).where(eq(jobsTable.id, doc.jobId));
+  const [profile] = await db.select().from(profileTable).where(eq(profileTable.id, 1));
+  const style = (profile?.styleMapJson as StyleMap | null) ?? defaultStyleMap();
 
-  // Serve the cached file if we already built it.
-  const cachedName = format === "docx" ? doc.docx_path : doc.pdf_path;
-  if (cachedName) {
-    const cachedPath = path.join(uploadsDir, cachedName);
-    if (fs.existsSync(cachedPath)) {
-      res.download(cachedPath, downloadName(doc, job, profile, format));
+  const cachedKey = format === "docx" ? doc.docxObjectKey : doc.pdfObjectKey;
+  if (cachedKey) {
+    try {
+      const buffer = await downloadObject(cachedKey);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${downloadName(doc, job, profile, format)}"`,
+      );
+      res.send(buffer);
       return;
+    } catch {
+      // fall through and rebuild
     }
   }
 
   try {
     const buffer = await buildFile(doc, job, style, profile, format);
-    const stored = `doc-${doc.id}-${doc.type}.${format}`;
-    fs.writeFileSync(path.join(uploadsDir, stored), buffer);
-    db.prepare(
-      `UPDATE documents SET ${format === "docx" ? "docx_path" : "pdf_path"} = ? WHERE id = ?`,
-    ).run(stored, doc.id);
+    const key = newObjectKey(format);
+    await uploadObject(
+      key,
+      buffer,
+      format === "docx"
+        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        : "application/pdf",
+    );
+    await db
+      .update(documentsTable)
+      .set(format === "docx" ? { docxObjectKey: key } : { pdfObjectKey: key })
+      .where(eq(documentsTable.id, doc.id));
 
-    res.download(path.join(uploadsDir, stored), downloadName(doc, job, profile, format));
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${downloadName(doc, job, profile, format)}"`,
+    );
+    res.send(buffer);
   } catch (err) {
     req.log.error({ err, documentId: id, format }, "Document render failed");
     res.status(500).json({ error: "Could not generate that file. Please try again." });
@@ -128,28 +128,28 @@ router.get("/documents/:id/download/:format", async (req, res): Promise<void> =>
 });
 
 function downloadName(
-  doc: DocumentRow,
-  job: JobRow | undefined,
-  profile: ProfileRow | undefined,
+  doc: Document,
+  job: Job | undefined,
+  profile: Profile | undefined,
   format: "docx" | "pdf",
 ): string {
-  const resume = parseJson<ResumeJson>(profile?.resume_json ?? null);
+  const resume = (profile?.resumeJson as ResumeJson | null) ?? null;
   const name =
     doc.type === "resume"
-      ? candidateName(parseJson<ResumeJson>(doc.content_json))
+      ? candidateName(doc.contentJson as ResumeJson | null)
       : candidateName(resume);
   return docFilename(name, job?.company ?? null, doc.type === "resume" ? "Resume" : "Cover-Letter", format);
 }
 
 async function buildFile(
-  doc: DocumentRow,
-  job: JobRow | undefined,
+  doc: Document,
+  job: Job | undefined,
   style: StyleMap,
-  profile: ProfileRow | undefined,
+  profile: Profile | undefined,
   format: "docx" | "pdf",
 ): Promise<Buffer> {
   if (doc.type === "resume") {
-    const resume = parseJson<ResumeJson>(doc.content_json);
+    const resume = doc.contentJson as ResumeJson | null;
     if (!resume || !Array.isArray(resume.sections)) throw new Error("Resume content is missing.");
     const docx = await buildResumeDocx(resume, style);
     if (format === "docx") return docx;
@@ -162,9 +162,9 @@ async function buildFile(
   }
 
   // cover_letter
-  const full = parseJson<CoverLetterFull>(doc.content_json);
+  const full = doc.contentJson as CoverLetterFull | null;
   if (!full || typeof full.body !== "string") throw new Error("Cover letter content is missing.");
-  const name = candidateName(parseJson<ResumeJson>(profile?.resume_json ?? null));
+  const name = candidateName((profile?.resumeJson as ResumeJson | null) ?? null);
   void job;
   const docx = await buildCoverLetterDocx(full, name, style);
   if (format === "docx") return docx;

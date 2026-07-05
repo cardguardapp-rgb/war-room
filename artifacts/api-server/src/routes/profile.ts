@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import JSZip from "jszip";
 import {
   Router,
@@ -9,26 +7,16 @@ import {
   type Response,
 } from "express";
 import multer from "multer";
-import { db, type ProfileRow } from "../lib/db";
-import { uploadsDir, dataDir } from "../lib/paths";
+import { db, eq, ensureProfileRow, profileTable, jobsTable, documentsTable, qaLogTable, discoverSettingsTable, discoverDismissedTable, type Profile } from "../lib/db";
+import { uploadObject, downloadObject, objectExists, deleteObject, newObjectKey } from "../lib/objectStore";
 import { parseResumeDocx } from "../lib/resumeParser";
 
 const router: IRouter = Router();
 
-fs.mkdirSync(uploadsDir, { recursive: true });
-
 const MAX_RESUME_BYTES = 5 * 1024 * 1024; // 5MB
-const RESUME_FILENAME_RE = /^resume-\d+\.docx$/i;
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => {
-      cb(null, uploadsDir);
-    },
-    filename: (_req, _file, cb) => {
-      cb(null, `resume-${Date.now()}.docx`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_RESUME_BYTES },
   fileFilter: (_req, file, cb) => {
     const isDocx =
@@ -60,69 +48,29 @@ function uploadResume(req: Request, res: Response, next: NextFunction): void {
   });
 }
 
-/** Parse the JSON text columns so the client receives real objects. */
-function serializeProfile(row: ProfileRow | undefined | null) {
+function serializeProfile(row: Profile | undefined | null) {
   if (!row) return null;
-  const parse = (value: string | null) => {
-    if (value == null) return null;
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  };
   return {
     ...row,
-    resume_json: parse(row.resume_json),
-    style_map_json: parse(row.style_map_json),
-    extra_answers_json: parse(row.extra_answers_json),
-    extra_context: row.extra_context ?? null,
+    resume_json: row.resumeJson ?? null,
+    style_map_json: row.styleMapJson ?? null,
+    extra_answers_json: row.extraAnswersJson ?? null,
+    extra_context: row.extraContext ?? null,
+    resume_filename: row.resumeFilename ?? null,
+    updated_at: row.updatedAt,
   };
 }
 
-function getProfile(): ProfileRow | undefined {
-  return db
-    .prepare("SELECT * FROM profile WHERE id = 1")
-    .get() as ProfileRow | undefined;
+async function getProfile(): Promise<Profile | undefined> {
+  const [row] = await db.select().from(profileTable).where(eq(profileTable.id, 1));
+  return row;
 }
 
-function ensureProfileRow(): void {
-  db.prepare(
-    "INSERT OR IGNORE INTO profile (id, updated_at) VALUES (1, datetime('now'))",
-  ).run();
-}
-
-/** Resolve a client-supplied resume filename to a safe path inside uploads. */
-function resolveResumePath(filename: string): string | null {
-  if (!RESUME_FILENAME_RE.test(filename)) return null;
-  const resolved = path.resolve(uploadsDir, filename);
-  if (path.dirname(resolved) !== path.resolve(uploadsDir)) return null;
-  return resolved;
-}
-
-/** Remove any resume-*.docx uploads except the ones we want to keep. */
-function cleanupResumeFiles(keep: string[]): void {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(uploadsDir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (!RESUME_FILENAME_RE.test(entry) || keep.includes(entry)) continue;
-    try {
-      fs.rmSync(path.join(uploadsDir, entry), { force: true });
-    } catch {
-      // best-effort cleanup
-    }
-  }
-}
-
-router.get("/profile", (_req, res): void => {
-  res.json(serializeProfile(getProfile()));
+router.get("/profile", async (_req, res): Promise<void> => {
+  res.json(serializeProfile(await getProfile()));
 });
 
-router.patch("/profile", (req, res): void => {
+router.patch("/profile", async (req, res): Promise<void> => {
   const { resume_json, style_map_json, extra_answers_json, extra_context } =
     req.body ?? {};
 
@@ -131,32 +79,25 @@ router.patch("/profile", (req, res): void => {
     return;
   }
 
-  ensureProfileRow();
+  await ensureProfileRow();
 
-  db.prepare(
-    `UPDATE profile
-     SET resume_json = COALESCE(?, resume_json),
-         style_map_json = COALESCE(?, style_map_json),
-         extra_answers_json = COALESCE(?, extra_answers_json),
-         extra_context = CASE WHEN ? THEN ? ELSE extra_context END,
-         updated_at = datetime('now')
-     WHERE id = 1`,
-  ).run(
-    resume_json != null ? JSON.stringify(resume_json) : null,
-    style_map_json != null ? JSON.stringify(style_map_json) : null,
-    extra_answers_json != null ? JSON.stringify(extra_answers_json) : null,
-    extra_context !== undefined ? 1 : 0,
-    extra_context ?? null,
-  );
+  const updates: Partial<typeof profileTable.$inferInsert> = { updatedAt: new Date() };
+  if (resume_json != null) updates.resumeJson = resume_json;
+  if (style_map_json != null) updates.styleMapJson = style_map_json;
+  if (extra_answers_json != null) updates.extraAnswersJson = extra_answers_json;
+  if (extra_context !== undefined) updates.extraContext = extra_context;
 
-  res.json(serializeProfile(getProfile()));
+  await db.update(profileTable).set(updates).where(eq(profileTable.id, 1));
+
+  res.json(serializeProfile(await getProfile()));
 });
 
 /**
  * Upload + parse a resume WITHOUT committing it. Returns the parsed structure
- * for the user to review. The original .docx is kept on disk (referenced by the
- * returned `filename`) so a later PUT /profile/resume can confirm it. The
- * existing profile is left untouched until the user confirms.
+ * for the user to review. The original .docx is stashed in object storage
+ * (referenced by the returned `filename`, an object key) so a later
+ * PUT /profile/resume can confirm it. The existing profile is left untouched
+ * until the user confirms.
  */
 router.post(
   "/profile/resume/parse",
@@ -167,15 +108,16 @@ router.post(
       return;
     }
 
-    const filename = req.file.filename;
-    const committed = getProfile()?.resume_filename ?? "";
-    // Keep only the committed resume + this new upload; drop stale orphans.
-    cleanupResumeFiles([committed, filename]);
+    const filename = newObjectKey("docx");
 
     try {
-      const buffer = fs.readFileSync(req.file.path);
-      const { resumeJson, styleMap, warnings } =
-        await parseResumeDocx(buffer);
+      const buffer = req.file.buffer;
+      const { resumeJson, styleMap, warnings } = await parseResumeDocx(buffer);
+      await uploadObject(
+        filename,
+        buffer,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      );
       req.log.info(
         { filename, warnings: warnings.length },
         "Resume parsed for review",
@@ -187,12 +129,6 @@ router.post(
         warnings,
       });
     } catch (err) {
-      // Failed to parse -> discard the upload so it doesn't linger.
-      try {
-        fs.rmSync(req.file.path, { force: true });
-      } catch {
-        // ignore
-      }
       req.log.error({ err, filename }, "Resume parse failed");
       res.status(422).json({
         error:
@@ -206,23 +142,19 @@ router.post(
 
 /**
  * Confirm a reviewed resume. Persists the (possibly user-corrected) structured
- * data + style map and marks `filename` as the base resume on disk. The
- * previous base resume file is removed — the parsed structure is now the single
- * source of truth; the .docx is kept only as a formatting reference.
+ * data + style map and marks `filename` (an object storage key) as the base
+ * resume. The previous base resume file is removed — the parsed structure is
+ * now the single source of truth; the .docx is kept only as a formatting
+ * reference.
  */
-router.put("/profile/resume", (req, res): void => {
+router.put("/profile/resume", async (req, res): Promise<void> => {
   const { filename, resume_json, style_map_json } = req.body ?? {};
 
   if (typeof filename !== "string") {
     res.status(400).json({ error: "filename is required" });
     return;
   }
-  const resolved = resolveResumePath(filename);
-  if (!resolved) {
-    res.status(400).json({ error: "Invalid resume filename" });
-    return;
-  }
-  if (!fs.existsSync(resolved)) {
+  if (!(await objectExists(filename))) {
     res.status(404).json({
       error: "That uploaded resume is no longer available. Please re-upload.",
     });
@@ -233,73 +165,68 @@ router.put("/profile/resume", (req, res): void => {
     return;
   }
 
-  ensureProfileRow();
+  await ensureProfileRow();
 
-  db.prepare(
-    `UPDATE profile
-     SET resume_filename = ?,
-         resume_json = ?,
-         style_map_json = COALESCE(?, style_map_json),
-         updated_at = datetime('now')
-     WHERE id = 1`,
-  ).run(
-    filename,
-    JSON.stringify(resume_json),
-    style_map_json != null ? JSON.stringify(style_map_json) : null,
-  );
+  const previous = await getProfile();
 
-  // The confirmed file is now the only base resume we keep.
-  cleanupResumeFiles([filename]);
+  await db
+    .update(profileTable)
+    .set({
+      resumeFilename: filename,
+      resumeJson: resume_json,
+      styleMapJson: style_map_json != null ? style_map_json : undefined,
+      updatedAt: new Date(),
+    })
+    .where(eq(profileTable.id, 1));
+
+  if (previous?.resumeFilename && previous.resumeFilename !== filename) {
+    await deleteObject(previous.resumeFilename);
+  }
 
   req.log.info({ filename }, "Resume confirmed and saved");
-  res.json(serializeProfile(getProfile()));
+  res.json(serializeProfile(await getProfile()));
 });
 
 /**
  * Full data export: everything the app holds, as a single .zip the user can
- * keep as a backup. Contains a consistent SQLite snapshot (`app.db`), a
- * human-readable `data.json` dump of every table, and every file under
- * `uploads/` (the original resume + all generated .docx/.pdf documents).
+ * keep as a backup. Contains a human-readable `data.json` dump of every
+ * table plus every stored file (resume + generated documents).
  */
 router.get("/profile/export", async (req, res): Promise<void> => {
-  const tmpDb = path.join(dataDir, `export-${Date.now()}.db`);
   try {
     const zip = new JSZip();
 
-    // 1. Consistent SQLite snapshot (handles WAL correctly).
-    await db.backup(tmpDb);
-    zip.file("app.db", fs.readFileSync(tmpDb));
+    const [profile, jobs, documents, qaLog, discoverSettings, discoverDismissed] =
+      await Promise.all([
+        db.select().from(profileTable),
+        db.select().from(jobsTable),
+        db.select().from(documentsTable),
+        db.select().from(qaLogTable),
+        db.select().from(discoverSettingsTable),
+        db.select().from(discoverDismissedTable),
+      ]);
 
-    // 2. Human-readable dump of every table.
-    const dump: Record<string, unknown> = { exported_at: new Date().toISOString() };
-    for (const table of [
-      "profile",
-      "jobs",
-      "documents",
-      "qa_log",
-      "discover_settings",
-      "discover_dismissed",
-    ]) {
-      try {
-        dump[table] = db.prepare(`SELECT * FROM ${table}`).all();
-      } catch {
-        dump[table] = [];
-      }
-    }
+    const dump = {
+      exported_at: new Date().toISOString(),
+      profile,
+      jobs,
+      documents,
+      qa_log: qaLog,
+      discover_settings: discoverSettings,
+      discover_dismissed: discoverDismissed,
+    };
     zip.file("data.json", JSON.stringify(dump, null, 2));
 
-    // 3. Every uploaded/generated file.
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(uploadsDir);
-    } catch {
-      files = [];
+    const objectKeys = new Set<string>();
+    for (const p of profile) if (p.resumeFilename) objectKeys.add(p.resumeFilename);
+    for (const d of documents) {
+      if (d.docxObjectKey) objectKeys.add(d.docxObjectKey);
+      if (d.pdfObjectKey) objectKeys.add(d.pdfObjectKey);
     }
-    for (const name of files) {
-      const full = path.join(uploadsDir, name);
+    for (const key of objectKeys) {
       try {
-        if (fs.statSync(full).isFile()) {
-          zip.file(`uploads/${name}`, fs.readFileSync(full));
+        if (await objectExists(key)) {
+          zip.file(`files/${key}`, await downloadObject(key));
         }
       } catch {
         // skip unreadable file
@@ -314,33 +241,27 @@ router.get("/profile/export", async (req, res): Promise<void> => {
       `attachment; filename="war-room-backup-${date}.zip"`,
     );
     res.send(buffer);
-    req.log.info({ files: files.length }, "Data export generated");
+    req.log.info({ files: objectKeys.size }, "Data export generated");
   } catch (err) {
     req.log.error({ err }, "Data export failed");
     res.status(500).json({ error: "Could not build the export. Please try again." });
-  } finally {
-    try {
-      fs.rmSync(tmpDb, { force: true });
-    } catch {
-      // ignore
-    }
   }
 });
 
-router.get("/profile/resume", (_req, res): void => {
-  const profile = getProfile();
-  if (!profile?.resume_filename) {
+router.get("/profile/resume", async (_req, res): Promise<void> => {
+  const profile = await getProfile();
+  if (!profile?.resumeFilename) {
     res.status(404).json({ error: "No resume uploaded yet" });
     return;
   }
 
-  const filePath = path.join(uploadsDir, profile.resume_filename);
-  if (!fs.existsSync(filePath)) {
-    res.status(404).json({ error: "Resume file not found on disk" });
-    return;
+  try {
+    const buffer = await downloadObject(profile.resumeFilename);
+    res.setHeader("Content-Disposition", `attachment; filename="${profile.resumeFilename}"`);
+    res.send(buffer);
+  } catch {
+    res.status(404).json({ error: "Resume file not found" });
   }
-
-  res.download(filePath, profile.resume_filename);
 });
 
 export default router;

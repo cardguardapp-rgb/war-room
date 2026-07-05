@@ -30,7 +30,6 @@ async function buildAll() {
     external: [
       "*.node",
       "sharp",
-      "better-sqlite3",
       "sqlite3",
       // jsdom pulls in optional native deps (canvas) and resolves data files via
       // dynamic requires — leave it external and load it from node_modules at runtime.
