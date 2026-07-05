@@ -112,6 +112,13 @@ interface Block {
   breakBefore?: boolean;
   /** This block belongs to the same "keep together" group as the next block(s). */
   groupId?: number;
+  /**
+   * Bullet glyph to draw at `indent` on the first wrapped line only; wrapped
+   * continuation lines are indented an extra `hangingIndent` so they align
+   * under the text rather than under the bullet mark.
+   */
+  bullet?: string;
+  hangingIndent?: number;
 }
 
 function hexToRgb(hex: string | null, fallback: [number, number, number]): [number, number, number] {
@@ -166,7 +173,8 @@ async function blocksToPdf(blocks: Block[]): Promise<Buffer> {
   const blockHeight = (b: Block): number => {
     const font = b.bold ? bold : regular;
     const lineHeight = b.sizePt * 1.3;
-    const lines = wrapLines(b.text, font, b.sizePt, maxWidth - b.indent);
+    const hanging = b.hangingIndent ?? 0;
+    const lines = wrapLines(b.text, font, b.sizePt, maxWidth - b.indent - hanging);
     return lines.length * lineHeight + b.gapAfter;
   };
 
@@ -191,19 +199,29 @@ async function blocksToPdf(blocks: Block[]): Promise<Buffer> {
     for (const b of group) {
       const font = b.bold ? bold : regular;
       const lineHeight = b.sizePt * 1.3;
-      const lines = wrapLines(b.text, font, b.sizePt, maxWidth - b.indent);
+      const hanging = b.hangingIndent ?? 0;
+      const lines = wrapLines(b.text, font, b.sizePt, maxWidth - b.indent - hanging);
 
-      for (const line of lines) {
+      lines.forEach((line, idx) => {
         if (y - lineHeight < margin) newPage();
+        if (idx === 0 && b.bullet) {
+          page.drawText(b.bullet, {
+            x: margin + b.indent,
+            y: y - b.sizePt,
+            size: b.sizePt,
+            font,
+            color: rgb(b.color[0], b.color[1], b.color[2]),
+          });
+        }
         page.drawText(line, {
-          x: margin + b.indent,
+          x: margin + b.indent + hanging,
           y: y - b.sizePt,
           size: b.sizePt,
           font,
           color: rgb(b.color[0], b.color[1], b.color[2]),
         });
         y -= lineHeight;
-      }
+      });
       y -= b.gapAfter;
     }
 
@@ -280,7 +298,9 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
           });
           const meta = [it.dates, it.location].filter(Boolean).join("  ·  ");
           if (meta) line(meta, { groupId: gid });
-          it.bullets.forEach((b) => line(`•  ${b}`, { indent: 14, gapAfter: 4, groupId: gid }));
+          it.bullets.forEach((b) =>
+            line(b, { indent: 14, hangingIndent: 12, bullet: "•", gapAfter: 4, groupId: gid }),
+          );
           if (blocks.length) blocks[blocks.length - 1].gapAfter = 14;
         });
         break;
@@ -292,19 +312,21 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
           line([it.institution, it.qualification].filter(Boolean).join(" — "), { bold: true, groupId: gid });
           const meta = [it.dates, it.location].filter(Boolean).join("  ·  ");
           if (meta) line(meta, { groupId: gid });
-          it.details.forEach((d) => line(`•  ${d}`, { indent: 14, groupId: gid }));
+          it.details.forEach((d) =>
+            line(d, { indent: 14, hangingIndent: 12, bullet: "•", groupId: gid }),
+          );
           if (blocks.length) blocks[blocks.length - 1].gapAfter = 14;
         });
         break;
       }
       case "skills":
         heading(sec.heading || "Skills");
-        line(sec.items.join("  •  "), { gapAfter: 16 });
+        line(sec.items.join(", ") + ".", { gapAfter: 16 });
         break;
       case "other":
         heading(sec.heading || "Other");
         sec.paragraphs.forEach((p) => line(p, { gapAfter: 4 }));
-        sec.bullets.forEach((b) => line(`•  ${b}`, { indent: 14 }));
+        sec.bullets.forEach((b) => line(b, { indent: 14, hangingIndent: 12, bullet: "•" }));
         if (blocks.length) blocks[blocks.length - 1].gapAfter = 10;
         break;
     }

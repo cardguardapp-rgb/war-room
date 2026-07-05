@@ -166,8 +166,8 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
         children.push(headingPara(sec.heading || "Skills"));
         if (sec.items.length)
           children.push(
-            para([runFor(sec.items.join("   •   "), el.body, 11)], {
-              spacing: { after: 240 },
+            para([runFor(sec.items.join(", ") + ".", el.body, 11)], {
+              spacing: { after: 240, line: 300 },
               keepLines: true,
             }),
           );
