@@ -201,22 +201,26 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
       case "skills": {
         children.push(headingPara(sec.heading || "Skills"));
         // Capped at MAX_SKILLS and laid out as short, evenly-grouped lines
-        // (a few skills per line, separated by a middle dot) rather than one
-        // bullet per skill or one giant comma-separated paragraph. This is
-        // still plain paragraphs/text runs (no tables/columns), so it stays
-        // ATS-safe, but reads as a compact, organised block instead of a
-        // long list or a wall of text.
+        // (a few skills per line) rather than one bullet per skill or one
+        // giant comma-separated paragraph. Items within a row are joined
+        // with a comma — a plain comma list wraps naturally at any point
+        // (a trailing comma at line-end reads normally), unlike a "•" or "·"
+        // separator, which can end up stranded alone at the start of a
+        // wrapped line and look like a rendering glitch. Still plain
+        // paragraphs/text runs (no tables/columns), so it stays ATS-safe.
         const capped = sec.items.slice(0, MAX_SKILLS);
         const rows = chunk(capped, 3);
-        rows.forEach((row, i) =>
+        rows.forEach((row, i) => {
+          const isLast = i === rows.length - 1;
+          const text = row.join(", ") + (isLast ? "." : ",");
           children.push(
-            para([runFor(row.join("   ·   "), el.body, 11)], {
-              spacing: { after: i === rows.length - 1 ? 320 : 140, line: 300 },
+            para([runFor(text, el.body, 11)], {
+              spacing: { after: isLast ? 320 : 140, line: 300 },
               keepLines: true,
-              keepNext: i < rows.length - 1,
+              keepNext: !isLast,
             }),
-          ),
-        );
+          );
+        });
         break;
       }
       case "other": {

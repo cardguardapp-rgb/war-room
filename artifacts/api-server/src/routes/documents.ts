@@ -182,6 +182,28 @@ function downloadName(
   return docFilename(name, job?.company ?? null, doc.type === "resume" ? "Resume" : "Cover-Letter", format);
 }
 
+/**
+ * Every downloaded resume is a per-job tailored snapshot frozen in
+ * `contentJson` at tailoring time, but contact details (name, email, phone,
+ * location, links, and extra lines like a headline) are profile-level facts,
+ * not something that should be "tailored" per job. Without this, editing or
+ * removing a contact line in the profile (e.g. an outdated job title) would
+ * never show up in already-tailored documents — the frozen snapshot would
+ * keep serving the stale line forever, even after "regenerate". Always
+ * overlay the resume's contact section with the current profile contact
+ * section so every download reflects the latest profile info.
+ */
+function withCurrentContact(resume: ResumeJson, profile: Profile | undefined): ResumeJson {
+  const baseResume = (profile?.resumeJson as ResumeJson | null) ?? null;
+  const currentContact = baseResume?.sections?.find((s) => s.kind === "contact");
+  if (!currentContact) return resume;
+  const idx = resume.sections.findIndex((s) => s.kind === "contact");
+  if (idx === -1) return resume;
+  const sections = resume.sections.slice();
+  sections[idx] = currentContact;
+  return { ...resume, sections };
+}
+
 async function buildFile(
   doc: Document,
   job: Job | undefined,
@@ -190,8 +212,9 @@ async function buildFile(
   format: "docx" | "pdf",
 ): Promise<Buffer> {
   if (doc.type === "resume") {
-    const resume = doc.contentJson as ResumeJson | null;
-    if (!resume || !Array.isArray(resume.sections)) throw new Error("Resume content is missing.");
+    const stored = doc.contentJson as ResumeJson | null;
+    if (!stored || !Array.isArray(stored.sections)) throw new Error("Resume content is missing.");
+    const resume = withCurrentContact(stored, profile);
     const docx = await buildResumeDocx(resume, style);
     if (format === "docx") return docx;
     try {

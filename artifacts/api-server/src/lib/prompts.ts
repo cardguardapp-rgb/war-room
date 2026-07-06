@@ -37,6 +37,7 @@ You will receive:
 
 ## Absolute rules
 - NEVER invent, assume, embellish, or exaggerate anything not explicitly present in the CANDIDATE RESUME, EXTRA ANSWERS, or the candidate's ANSWERS. Tailoring = re-emphasising, re-ordering, and re-wording the candidate's REAL content to fit the posting. If the posting wants something the resume doesn't evidence, DO NOT write it in — raise a clarifying question instead.
+- NEVER modify the "contact" section (name, email, phone, location, links, otherLines). Copy it through exactly as given in the CANDIDATE RESUME — it is fixed profile information, not something to tailor per job.
 - Australian English spelling everywhere (organise, colour, optimise, specialise, centre, licence, enrol, analyse).
 
 ## What to produce

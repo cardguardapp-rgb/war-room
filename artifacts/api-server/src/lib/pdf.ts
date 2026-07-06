@@ -332,15 +332,17 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
       case "skills": {
         heading(sec.heading || "Skills");
         // Capped and grouped a few per line (matching the primary .docx
-        // renderer) — still plain text lines, so it stays ATS-safe, but
-        // reads as a compact, organised block instead of a long list or a
-        // dense comma-separated paragraph.
+        // renderer) — items joined with a comma rather than a "·" separator,
+        // since a comma list wraps naturally at any point while a lone "·"
+        // can end up stranded at the start of a wrapped line. Still plain
+        // text lines, so it stays ATS-safe.
         const capped = sec.items.slice(0, MAX_SKILLS);
         const rows: string[][] = [];
         for (let i = 0; i < capped.length; i += 3) rows.push(capped.slice(i, i + 3));
-        rows.forEach((row, i) =>
-          line(row.join("   ·   "), { gapAfter: i === rows.length - 1 ? 16 : 6 }),
-        );
+        rows.forEach((row, i) => {
+          const isLast = i === rows.length - 1;
+          line(row.join(", ") + (isLast ? "." : ","), { gapAfter: isLast ? 16 : 6 });
+        });
         break;
       }
       case "other":
