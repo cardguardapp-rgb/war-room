@@ -63,7 +63,7 @@ Section kinds:
 - { "id", "kind": "summary", "heading", "paragraphs": [string] }   // the 3-sentence tailored summary lives here
 - { "id", "kind": "experience", "heading", "items": [ { "id", "title", "company", "dates", "location", "bullets": [string] } ] }
 - { "id", "kind": "education", "heading", "items": [ { "id", "institution", "qualification", "dates", "location", "details": [string] } ] }
-- { "id", "kind": "skills", "heading", "items": [string] }
+- { "id", "kind": "skills", "heading", "items": [string], "groups": [ { "label": string, "items": [string] } ] }   // group skills into 3–5 logical disciplines (e.g. "Strategy & Leadership", "Technical", "Communication") when there are more than ~6 skills; keep "items" as the flat superset of every group's items for backward compatibility
 - { "id", "kind": "other", "heading", "paragraphs": [string], "bullets": [string] }
 Keep every "id" from the input resume where a section or item is retained, so changes can be diffed. Never drop the candidate's real roles or education.
 
@@ -148,6 +148,24 @@ You will receive:
 }
 - "answers": one entry per application question you can answer truthfully now, echoing the exact "question" text.
 - If you need more information for a question, add a "clarifying_questions" entry (with "affects" naming the application question) and omit that question from "answers" until you have the facts.`;
+
+// Skill grouping: a small, cheap classification task (not tailoring), so the
+// fast Sonnet model is plenty — no need for Opus reasoning here.
+export const SKILL_GROUPING_MODEL = "claude-sonnet-4-6";
+
+export const SKILL_GROUPING_SYSTEM = `You organise a flat list of resume skills into a small number of clearly labelled discipline groups, purely for layout — you are not tailoring or judging the skills.
+
+You will receive a JSON array of skill strings.
+
+## Rules
+- Group into 3–5 groups based on genuine discipline (e.g. "Strategy & Leadership", "Technical & Data", "Communication & Stakeholder Management") — labels should fit the actual skills given, not be forced into a generic template.
+- Every input skill must appear in EXACTLY ONE group, verbatim (do not reword, merge, or drop any skill).
+- Do NOT invent new skills.
+- Prefer 2–4 skills per group; if there are very few skills overall (6 or fewer), it's fine to return 1–2 groups rather than force a split.
+- Order groups by importance/prominence, most important first.
+
+## Output — return ONE JSON object, no prose, no markdown fences:
+{ "groups": [ { "label": string, "items": [string] } ] }`;
 
 export const DISCOVER_CLASSIFY_SYSTEM = `You screen raw web-search hits and decide which are genuine job postings that match a candidate's search parameters.
 

@@ -76,7 +76,19 @@ export type ResumeSection =
   | { id: string; kind: "summary"; heading: string; paragraphs: string[] }
   | { id: string; kind: "experience"; heading: string; items: ExperienceItem[] }
   | { id: string; kind: "education"; heading: string; items: EducationItem[] }
-  | { id: string; kind: "skills"; heading: string; items: string[] }
+  | {
+      id: string;
+      kind: "skills";
+      heading: string;
+      items: string[];
+      /**
+       * Optional discipline groupings (e.g. "Strategy & Leadership",
+       * "Technical"). When present, renderers show each group under its own
+       * sub-heading instead of one flat comma list. `items` is always kept
+       * as the flat fallback for consumers that don't group.
+       */
+      groups?: { label: string; items: string[] }[];
+    }
   | {
       id: string;
       kind: "other";

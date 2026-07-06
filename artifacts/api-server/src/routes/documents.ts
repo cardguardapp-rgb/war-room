@@ -17,6 +17,7 @@ import {
 } from "../lib/pdf";
 import type { ResumeJson, StyleMap } from "../lib/resumeParser";
 import type { CoverLetterFull } from "../lib/coverLetters";
+import { groupSkills } from "../lib/skillGrouping";
 
 const router: IRouter = Router();
 
@@ -204,6 +205,47 @@ function withCurrentContact(resume: ResumeJson, profile: Profile | undefined): R
   return { ...resume, sections };
 }
 
+/**
+ * Skills are grouped into labelled disciplines for display (see
+ * `groupSkills`), but documents tailored before grouping existed only have a
+ * flat `items` list. Group them once on first render and persist the result
+ * onto the document row (the stored, non-contact-overridden `contentJson`)
+ * so it's a one-time AI call per document rather than repeated on every
+ * download. Grouping is a nice-to-have — any failure (no API key, bad
+ * response, etc.) just falls back to the existing flat rendering.
+ */
+async function withGroupedSkills(doc: Document, resume: ResumeJson): Promise<ResumeJson> {
+  const idx = resume.sections.findIndex((s) => s.kind === "skills");
+  if (idx === -1) return resume;
+  const skillsSec = resume.sections[idx];
+  if (skillsSec.kind !== "skills" || (skillsSec.groups && skillsSec.groups.length > 0)) return resume;
+
+  try {
+    const groups = await groupSkills(skillsSec.items);
+    if (!groups) return resume;
+
+    const sections = resume.sections.slice();
+    sections[idx] = { ...skillsSec, groups };
+    const grouped: ResumeJson = { ...resume, sections };
+
+    const stored = doc.contentJson as ResumeJson;
+    const storedIdx = stored.sections.findIndex((s) => s.kind === "skills");
+    const storedSkillsSec = storedIdx !== -1 ? stored.sections[storedIdx] : undefined;
+    if (storedSkillsSec && storedSkillsSec.kind === "skills") {
+      const storedSections = stored.sections.slice();
+      storedSections[storedIdx] = { ...storedSkillsSec, groups };
+      await db
+        .update(documentsTable)
+        .set({ contentJson: { ...stored, sections: storedSections } })
+        .where(eq(documentsTable.id, doc.id));
+    }
+
+    return grouped;
+  } catch {
+    return resume;
+  }
+}
+
 async function buildFile(
   doc: Document,
   job: Job | undefined,
@@ -214,7 +256,7 @@ async function buildFile(
   if (doc.type === "resume") {
     const stored = doc.contentJson as ResumeJson | null;
     if (!stored || !Array.isArray(stored.sections)) throw new Error("Resume content is missing.");
-    const resume = withCurrentContact(stored, profile);
+    const resume = await withGroupedSkills(doc, withCurrentContact(stored, profile));
     const docx = await buildResumeDocx(resume, style);
     if (format === "docx") return docx;
     try {

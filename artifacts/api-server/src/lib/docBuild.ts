@@ -200,27 +200,55 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
       }
       case "skills": {
         children.push(headingPara(sec.heading || "Skills"));
-        // Capped at MAX_SKILLS and laid out as short, evenly-grouped lines
-        // (a few skills per line) rather than one bullet per skill or one
-        // giant comma-separated paragraph. Items within a row are joined
-        // with a comma — a plain comma list wraps naturally at any point
-        // (a trailing comma at line-end reads normally), unlike a "•" or "·"
-        // separator, which can end up stranded alone at the start of a
-        // wrapped line and look like a rendering glitch. Still plain
-        // paragraphs/text runs (no tables/columns), so it stays ATS-safe.
-        const capped = sec.items.slice(0, MAX_SKILLS);
-        const rows = chunk(capped, 3);
-        rows.forEach((row, i) => {
-          const isLast = i === rows.length - 1;
-          const text = row.join(", ") + (isLast ? "." : ",");
-          children.push(
-            para([runFor(text, el.body, 11)], {
-              spacing: { after: isLast ? 320 : 140, line: 300 },
-              keepLines: true,
-              keepNext: !isLast,
-            }),
-          );
-        });
+        // Items within a row/group are joined with a comma — a plain comma
+        // list wraps naturally at any point (a trailing comma at line-end
+        // reads normally), unlike a "•" or "·" separator, which can end up
+        // stranded alone at the start of a wrapped line and look like a
+        // rendering glitch. Still plain paragraphs/text runs (no
+        // tables/columns), so it stays ATS-safe.
+        const commaRow = (items: string[], isLast: boolean) => items.join(", ") + (isLast ? "." : ",");
+
+        if (sec.groups && sec.groups.length > 0) {
+          // Grouped into disciplines: a bold sub-heading line per group,
+          // followed by its comma-joined skills — much more scannable than
+          // one long undifferentiated list once there are more than a
+          // handful of skills.
+          sec.groups.forEach((group, gIdx) => {
+            const isLastGroup = gIdx === sec.groups!.length - 1;
+            if (group.label) {
+              children.push(
+                para([runFor(group.label, el.jobTitle, 11, el.jobTitle?.bold ?? true)], {
+                  spacing: { before: gIdx === 0 ? 0 : 160, after: 60 },
+                  keepNext: true,
+                  keepLines: true,
+                }),
+              );
+            }
+            children.push(
+              para([runFor(commaRow(group.items, true), el.body, 11)], {
+                spacing: { after: isLastGroup ? 320 : 100, line: 300 },
+                keepLines: true,
+                keepNext: !isLastGroup,
+              }),
+            );
+          });
+        } else {
+          // Flat fallback: capped at MAX_SKILLS and laid out as short,
+          // evenly-grouped lines (a few skills per line) rather than one
+          // bullet per skill or one giant comma-separated paragraph.
+          const capped = sec.items.slice(0, MAX_SKILLS);
+          const rows = chunk(capped, 3);
+          rows.forEach((row, i) => {
+            const isLast = i === rows.length - 1;
+            children.push(
+              para([runFor(commaRow(row, isLast), el.body, 11)], {
+                spacing: { after: isLast ? 320 : 140, line: 300 },
+                keepLines: true,
+                keepNext: !isLast,
+              }),
+            );
+          });
+        }
         break;
       }
       case "other": {
