@@ -31,6 +31,27 @@ const verdictLabel: Record<MatchVerdict, string> = {
   no: "no",
 };
 
+/** Fit-score colour + one-word read, so the number is glanceable. */
+function fitStyle(score: number): { ring: string; text: string; label: string } {
+  if (score >= 8)
+    return {
+      ring: "border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40",
+      text: "text-emerald-700 dark:text-emerald-300",
+      label: "Strong fit",
+    };
+  if (score >= 5)
+    return {
+      ring: "border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40",
+      text: "text-amber-700 dark:text-amber-300",
+      label: "Worth a look",
+    };
+  return {
+    ring: "border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40",
+    text: "text-rose-700 dark:text-rose-300",
+    label: "Weak fit",
+  };
+}
+
 export function ResultCard({
   result,
   saved,
@@ -46,6 +67,7 @@ export function ResultCard({
   onSave: () => void;
   onDismiss: () => void;
 }) {
+  const fit = fitStyle(result.fit_score);
   return (
     <div className="rounded-2xl border border-border bg-card p-5 shadow-sm space-y-3 animate-in fade-in slide-in-from-bottom-2">
       <div className="flex items-start justify-between gap-3">
@@ -66,16 +88,28 @@ export function ResultCard({
             )}
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-11 w-11 md:h-9 md:w-9 shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-          title="Dismiss — never show this again"
-        >
-          <X className="w-4 h-4" />
-        </Button>
+        <div className="flex items-start gap-1.5 shrink-0">
+          <div
+            className={`flex flex-col items-center justify-center rounded-xl border px-2.5 py-1 leading-none ${fit.ring}`}
+            title={`Fit ${result.fit_score}/10 — ${fit.label}`}
+          >
+            <span className={`text-lg font-semibold ${fit.text}`}>
+              {result.fit_score}
+              <span className="text-xs font-normal opacity-70">/10</span>
+            </span>
+            <span className={`mt-0.5 text-[10px] font-medium ${fit.text}`}>Fit</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-11 w-11 md:h-9 md:w-9 text-muted-foreground hover:text-foreground"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+            title="Dismiss — never show this again"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -95,6 +129,13 @@ export function ResultCard({
           Location: {verdictLabel[result.location_match]}
         </Badge>
       </div>
+
+      {result.fit_note && (
+        <p className="text-sm">
+          <span className={`font-medium ${fit.text}`}>{fit.label}.</span>{" "}
+          <span className="text-muted-foreground">{result.fit_note}</span>
+        </p>
+      )}
 
       {result.reason && <p className="text-sm text-muted-foreground">{result.reason}</p>}
 

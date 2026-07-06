@@ -215,7 +215,10 @@ test: `pnpm --filter @workspace/api-server exec tsx test/parseFixture.ts`.
   now" button plus an editable parameters panel (role levels, office-region
   rule, remote rule, exclusions, extra keywords). Each result is a mobile-first
   card: title, company, location/arrangement + seniority/location-match badges,
-  a one-line reason, "Open listing" (new tab), "Tailor for this role" (seeds the
+  a **fit score out of 10** (colour-coded chip top-right + a "Strong fit / Worth
+  a look / Weak fit" line with a one-line `fit_note`) so the user can decide
+  whether to apply at all, a one-line reason, "Open listing" (new tab), "Tailor
+  for this role" (seeds the
   Add-a-job dialog → posting fetch with paste fallback → Job Detail), "Save"
   (adds to Jobs as `New`), and "Dismiss" (URL never shown again). A standing note
   says results are indicative. UI: `src/pages/discover.tsx` +
@@ -255,10 +258,20 @@ checks, and the JSON contract) live in `src/lib/prompts.ts`** — `TAILOR_SYSTEM
 - `POST /jobs/extract` `{ url }` or `{ posting_text }`. For a URL: fetches the
   page, extracts the main content with `@mozilla/readability` + `jsdom` (that
   cleaned text becomes `posting_text`), then Sonnet 4.6 classifies
-  title/company/location/work_arrangement (`jobExtract.ts`). If the fetch is
-  blocked/junk (LinkedIn etc.) it returns `{ fetch_failed: true, message }` and
-  the UI offers a paste box. It does **not** save — the UI shows an editable
-  review, then `POST /jobs` saves with status `New`.
+  title/company/location/work_arrangement AND returns a plain-English `summary`
+  (2–3 sentences on what the role is) and `flags[]` — an honest "should I even
+  bother?" list of reasons not to continue (seniority/location/arrangement
+  mismatch, fixed-term/relocation/excluded roles, other watch-outs); `[]` when
+  it's a clean fit (`jobExtract.ts`). The extract route loads the user's saved
+  **Discover criteria** (`discover_settings`, via `normaliseSettings`) and passes
+  them in as `JobCriteria` so flags are judged against the user's real
+  seniority/location/exclusion rules — criteria are best-effort and never block
+  extraction. If the fetch is blocked/junk (LinkedIn etc.) it returns
+  `{ fetch_failed: true, message }` and the UI offers a paste box. It does
+  **not** save — the review step (`AddJobDialog`) shows the summary panel + an
+  amber "Worth checking before you apply" flags panel above the editable fields,
+  then `POST /jobs` saves with status `New`. (`summary`/`flags` are advisory —
+  shown in the dialog, not stored on the job.)
 
 ### Tailoring flow (`tailor.ts` — never invents; asks instead)
 1. `POST /jobs/:id/tailor` — initial pass. Sends posting + `resume_json` +
@@ -339,24 +352,43 @@ parameters, with one-tap handoff into the tailoring pipeline.
   Australia), `exclusions[]` (junior/mid PM, <6-month contracts, relocation),
   `extraKeywords`. `GET/PUT /discover/settings`. `normaliseSettings` validates
   and fills defaults on both read and write.
-- **Search** (`POST /discover/search`): `buildQueries` fans each role title into
-  an office-region query and a remote-Australia query, plus two careers-page OR
-  sweeps (capped at 10). `tavily.ts` runs them via the **Tavily API**
-  (`search_depth: advanced`), merging + de-duping by URL. Dismissed URLs are
-  dropped, results de-duped by host+title, then classified in batches of 8 by
+- **Search** (`POST /discover/search`): targets **direct postings** on hiring
+  companies' own career sites, ATS platforms (Greenhouse/Lever/Workday/etc.) and
+  AU recruiter sites — NOT job-board search pages. `buildQueryPlan` (in
+  `discover.ts`) returns a `TavilyQuerySpec[]` where each query carries its own
+  domain filter: ATS-hosted sweeps (`include_domains: ATS_DOMAINS`), company
+  careers sweeps and per-title sweeps (`exclude_domains: AGGREGATOR_DOMAINS` —
+  seek/indeed/linkedin/glassdoor/jora/etc.), and a recruiter sweep
+  (`include_domains: RECRUITER_DOMAINS`); ~9 queries, capped at 11.
+  `buildQueries` = the query texts alone (for the smoke test). `tavily.ts`
+  `tavilySearchSpecs(specs, base)` runs them via the **Tavily API**
+  (`search_depth: advanced`, `max_results: 8`) with per-query include/exclude
+  domains, merging + de-duping by URL (`tavilySearchMany` is now a thin wrapper
+  over it). Raw hits are de-duped by host+title, then **`isSearchOrIndexPage(url)`
+  drops search-results / category / careers-index pages** (query-param search
+  signals, `/search|/browse|/results`, a bare `…/jobs`/`…/careers` root, or an
+  aggregator `…-jobs` slug with no id) so only specific postings survive —
+  `runDiscover` reports `droppedNonPostings`. Dismissed URLs are dropped, then
+  classified in batches of 8 by
   **`claude-sonnet-4-6`** (`DISCOVER_CLASSIFY_SYSTEM` in `prompts.ts`) which
   returns per-result `company`/`location`/`work_arrangement`, `seniority_match`
-  and `location_match` (`yes`/`no`/`unsure`), and a one-line reason. Clear
-  non-matches are discarded; **`unsure` results are kept and flagged**, never
-  hidden. A final company+title de-dupe runs across batches. Response includes a
-  `counts` object and an indicative-coverage `note`.
+  and `location_match` (`yes`/`no`/`unsure`), a **`fit_score` (integer 1–10) +
+  one-line `fit_note`** (overall fit, so the user can decide whether to bother —
+  coerced/clamped in `discover.ts`), and a one-line reason. Clear
+  non-matches are discarded (the classify prompt now also **requires a single
+  direct posting URL** and discards search/index/careers-landing pages as a
+  backstop); **`unsure` results are kept and flagged**, never hidden. A final
+  company+title de-dupe runs across batches. Response `counts` =
+  `{ raw, dropped_non_postings, screened, kept }` plus an indicative-coverage
+  `note`.
 - **Actions** (frontend): "Tailor for this role" seeds `AddJobDialog`
   (`JobSeed`) which auto-runs the Phase-3 extraction (paste fallback on a blocked
   fetch) then navigates to the Job Detail tailoring flow. "Save" fetches the
   posting (falling back to metadata only) and creates a `New` job. "Dismiss"
   calls `POST /discover/dismiss` and hides the URL forever.
-- **De-dupe** happens at three points: Tavily URL merge, pre-classification
-  host+title, post-classification company+title.
+- **De-dupe / filtering** happens at four points: Tavily URL merge,
+  pre-classification host+title, the `isSearchOrIndexPage` posting filter, and
+  post-classification company+title.
 
 Non-AI smoke test (tables + `normaliseSettings` + `buildQueries`, no keys):
 `pnpm --filter @workspace/api-server exec tsx test/discoverTest.ts`.

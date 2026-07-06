@@ -1,16 +1,17 @@
 import crypto from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job, type Profile } from "../lib/db";
+import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, discoverSettingsTable, type Job, type Profile } from "../lib/db";
 import { serializeJob, serializeDocument } from "../lib/serialize";
 import { deleteObject } from "../lib/objectStore";
 import { aiErrorResponse } from "../lib/anthropic";
-import { extractFromText, extractFromUrl } from "../lib/jobExtract";
+import { extractFromText, extractFromUrl, type JobCriteria } from "../lib/jobExtract";
+import { normaliseSettings } from "../lib/discover";
 import { runTailor, type QaPair } from "../lib/tailor";
 import type { ResumeJson } from "../lib/resumeParser";
 
 const router: IRouter = Router();
 
-const VALID_STATUSES = ["New", "Tailoring", "Ready", "Applied"] as const;
+const VALID_STATUSES = ["New", "Tailoring", "Ready", "Applied", "Not Applying"] as const;
 const WORK_ARRANGEMENTS = ["office", "hybrid", "remote", "unknown"];
 
 function parseId(raw: unknown): number | null {
@@ -140,6 +141,26 @@ router.delete("/jobs/:id", async (req, res): Promise<void> => {
 
 // --- Extraction (Part A) ------------------------------------------------
 
+/** The candidate's Discover criteria, so extraction can flag mismatches. Never throws. */
+async function loadCriteria(): Promise<JobCriteria | undefined> {
+  try {
+    const [row] = await db
+      .select()
+      .from(discoverSettingsTable)
+      .where(eq(discoverSettingsTable.id, 1));
+    if (!row?.settingsJson) return undefined;
+    const s = normaliseSettings(row.settingsJson);
+    return {
+      roleTitles: s.roleTitles,
+      officeRegion: s.officeRegion,
+      remoteRule: s.remoteRule,
+      exclusions: s.exclusions,
+    };
+  } catch {
+    return undefined; // criteria are a bonus — never block extraction on them
+  }
+}
+
 router.post("/jobs/extract", async (req, res): Promise<void> => {
   const { url, posting_text } = req.body ?? {};
   const hasUrl = typeof url === "string" && url.trim().length > 0;
@@ -151,10 +172,11 @@ router.post("/jobs/extract", async (req, res): Promise<void> => {
   }
 
   try {
+    const criteria = await loadCriteria();
     if (hasUrl) {
       const trimmed = url.trim();
       const normalised = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-      const result = await extractFromUrl(normalised);
+      const result = await extractFromUrl(normalised, criteria);
       if (!result.ok) {
         // Expected for blocked/junk pages — tell the client to offer paste.
         req.log.info({ url: normalised }, "Job URL fetch failed; offering paste");
@@ -164,7 +186,7 @@ router.post("/jobs/extract", async (req, res): Promise<void> => {
       res.json({ fetch_failed: false, ...result.data });
       return;
     }
-    const data = await extractFromText(posting_text);
+    const data = await extractFromText(posting_text, criteria);
     res.json({ fetch_failed: false, ...data });
   } catch (err) {
     const mapped = aiErrorResponse(err);

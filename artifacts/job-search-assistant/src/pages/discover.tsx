@@ -222,7 +222,9 @@ export default function Discover() {
         results.length > 0 ? (
           <div className="space-y-4">
             <p className="text-xs text-muted-foreground">
-              {results.length} shown · screened {response.counts.screened} of {response.counts.raw} raw hits.
+              {results.length} direct {results.length === 1 ? "posting" : "postings"} shown · from{" "}
+              {response.counts.raw} hits, {response.counts.dropped_non_postings} search/index pages
+              filtered out.
             </p>
             {results.map((r) => (
               <ResultCard

@@ -91,7 +91,7 @@ async function fetchMultipart<T>(path: string, formData: FormData): Promise<T> {
   return response.json();
 }
 
-export type JobStatus = 'New' | 'Tailoring' | 'Ready' | 'Applied';
+export type JobStatus = 'New' | 'Tailoring' | 'Ready' | 'Applied' | 'Not Applying';
 export type WorkArrangement = 'office' | 'hybrid' | 'remote' | 'unknown';
 
 export interface Job {
@@ -113,6 +113,8 @@ export interface ExtractResponse {
   company?: string;
   location?: string;
   work_arrangement?: WorkArrangement;
+  summary?: string;
+  flags?: string[];
   posting_text?: string;
   source_url?: string;
 }
@@ -187,12 +189,14 @@ export interface DiscoverResult {
   work_arrangement: WorkArrangement;
   seniority_match: MatchVerdict;
   location_match: MatchVerdict;
+  fit_score: number;
+  fit_note: string;
   reason: string;
 }
 
 export interface DiscoverSearchResponse {
   results: DiscoverResult[];
-  counts: { raw: number; screened: number; kept: number };
+  counts: { raw: number; dropped_non_postings: number; screened: number; kept: number };
   note: string;
 }
 

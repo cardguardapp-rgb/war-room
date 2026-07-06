@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertTriangle, ChevronLeft, Link2, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronLeft, Info, Link2, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import type { WorkArrangement } from "@/lib/api";
 
@@ -29,6 +29,8 @@ interface Draft {
   work_arrangement: WorkArrangement;
   posting_text: string;
   source_url: string;
+  summary: string;
+  flags: string[];
 }
 
 const EMPTY: Draft = {
@@ -38,6 +40,8 @@ const EMPTY: Draft = {
   work_arrangement: "unknown",
   posting_text: "",
   source_url: "",
+  summary: "",
+  flags: [],
 };
 
 /** Optional pre-fill for the dialog (used by Discover's "Tailor for this role"). */
@@ -109,6 +113,8 @@ export function AddJobDialog({
     work_arrangement?: WorkArrangement;
     posting_text?: string;
     source_url?: string;
+    summary?: string;
+    flags?: string[];
   }) => {
     // Fall back to the seed (e.g. Discover metadata) where extraction is thin.
     setDraft({
@@ -118,6 +124,8 @@ export function AddJobDialog({
       work_arrangement: data.work_arrangement || seed?.work_arrangement || "unknown",
       posting_text: data.posting_text ?? "",
       source_url: data.source_url || seed?.url || "",
+      summary: (data.summary ?? "").trim(),
+      flags: Array.isArray(data.flags) ? data.flags.filter((f) => f && f.trim()) : [],
     });
     setStep("review");
   };
@@ -283,6 +291,32 @@ export function AddJobDialog({
           </Tabs>
         ) : (
           <div className="p-6 pt-4 space-y-4 overflow-y-auto">
+            {draft.summary && (
+              <div className="rounded-xl border border-border bg-muted/40 p-3.5 space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Info className="w-3.5 h-3.5" /> What this role is
+                </div>
+                <p className="text-sm leading-relaxed">{draft.summary}</p>
+              </div>
+            )}
+            {draft.flags.length > 0 && (
+              <div className="rounded-xl border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 p-3.5 space-y-2">
+                <div className="flex items-center gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="w-4 h-4" /> Worth checking before you apply
+                </div>
+                <ul className="space-y-1.5">
+                  {draft.flags.map((f, i) => (
+                    <li
+                      key={i}
+                      className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-300"
+                    >
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs text-muted-foreground">

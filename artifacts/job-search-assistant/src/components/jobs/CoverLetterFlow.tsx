@@ -41,7 +41,14 @@ const REVISE_STAGES = [
   "Finishing up…",
 ];
 
-export function CoverLetterFlow({ job }: { job: Job }) {
+export function CoverLetterFlow({
+  job,
+  alreadySaved = false,
+}: {
+  job: Job;
+  /** True when this job already has saved cover letters (shows regenerate wording). */
+  alreadySaved?: boolean;
+}) {
   const { data: profile } = useProfile();
   const start = useCoverLetterStart();
   const recordQa = useRecordQa();
@@ -194,6 +201,11 @@ export function CoverLetterFlow({ job }: { job: Job }) {
             <CheckCircle2 className="w-4 h-4 mt-0.5 text-emerald-500 shrink-0" />
             <span>Saved. Download the full letter (.docx / PDF) and copy the plain and short versions from <b>Documents</b> below.</span>
           </div>
+        ) : alreadySaved ? (
+          <p className="text-sm text-muted-foreground">
+            You've already saved cover letters for this job. Generate again to rewrite them —
+            you can request changes in the review step, and saving <b>replaces</b> the saved versions.
+          </p>
         ) : (
           <p className="text-sm text-muted-foreground">
             Three versions in one pass — a full letter, a plain body for form fields, and a short note.
@@ -218,7 +230,12 @@ export function CoverLetterFlow({ job }: { job: Job }) {
             </>
           ) : (
             <>
-              <Mail className="w-4 h-4 mr-2" /> {phase === "saved" ? "Generate again" : "Generate cover letters"}
+              <Mail className="w-4 h-4 mr-2" />{" "}
+              {phase === "saved"
+                ? "Generate again"
+                : alreadySaved
+                  ? "Regenerate cover letters"
+                  : "Generate cover letters"}
             </>
           )}
         </Button>

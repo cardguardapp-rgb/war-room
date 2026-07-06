@@ -123,17 +123,32 @@ export async function tavilySearch(
     }));
 }
 
+/** A single query plus its own optional domain filters (include/exclude). */
+export interface TavilyQuerySpec {
+  query: string;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+}
+
 /**
- * Run several queries and merge their results, de-duplicating by URL. A single
- * query failing config/auth propagates (whole search can't work); transient
+ * Run several query specs and merge their results, de-duplicating by URL. Each
+ * spec carries its own domain filters, so one call can target ATS platforms,
+ * another company careers pages, another recruiter sites. A config/auth failure
+ * propagates only if EVERY query failed (nothing will work); transient
  * per-query failures are swallowed so one bad query doesn't sink the batch.
  */
-export async function tavilySearchMany(
-  queries: string[],
-  opts: TavilySearchOptions = {},
+export async function tavilySearchSpecs(
+  specs: TavilyQuerySpec[],
+  base: TavilySearchOptions = {},
 ): Promise<TavilyResult[]> {
   const settled = await Promise.allSettled(
-    queries.map((q) => tavilySearch(q, opts)),
+    specs.map((s) =>
+      tavilySearch(s.query, {
+        ...base,
+        includeDomains: s.includeDomains ?? base.includeDomains,
+        excludeDomains: s.excludeDomains ?? base.excludeDomains,
+      }),
+    ),
   );
 
   // If every query failed with a config error, surface it (nothing will work).
@@ -155,4 +170,15 @@ export async function tavilySearchMany(
     }
   }
   return [...byUrl.values()];
+}
+
+/** Plain multi-query search (one shared set of options). Thin wrapper over specs. */
+export async function tavilySearchMany(
+  queries: string[],
+  opts: TavilySearchOptions = {},
+): Promise<TavilyResult[]> {
+  return tavilySearchSpecs(
+    queries.map((query) => ({ query })),
+    opts,
+  );
 }

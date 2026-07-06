@@ -73,8 +73,13 @@ router.post("/discover/search", async (req, res): Promise<void> => {
     const run = await runDiscover(settings, (url) => dismissed.has(url));
     res.json({
       results: run.results,
-      counts: { raw: run.rawCount, screened: run.screenedCount, kept: run.results.length },
-      note: "Search results are indicative — Tavily and AI screening won't surface every listing, and some matches may still be off. Always open the original posting to confirm.",
+      counts: {
+        raw: run.rawCount,
+        dropped_non_postings: run.droppedNonPostings,
+        screened: run.screenedCount,
+        kept: run.results.length,
+      },
+      note: "Results now target direct postings on company career sites, applicant-tracking systems and recruiter sites — job-board search/category pages are filtered out. Coverage is still indicative: web search and AI screening won't surface every role, and some may still be off. Always open the posting to confirm.",
     });
   } catch (err) {
     const mapped = discoverErrorResponse(err);

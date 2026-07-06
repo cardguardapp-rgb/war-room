@@ -38,6 +38,7 @@ const statusColors: Record<JobStatus, string> = {
   Tailoring: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
   Ready: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300",
   Applied: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300",
+  "Not Applying": "bg-slate-100 text-slate-600 dark:bg-slate-800/50 dark:text-slate-400",
 };
 
 const arrangementLabels: Record<string, string> = { office: "Office", hybrid: "Hybrid", remote: "Remote" };
@@ -155,7 +156,7 @@ export default function JobDetail() {
 
         <div className="flex items-center gap-2 shrink-0">
           <Select value={job.status} onValueChange={handleStatusChange}>
-            <SelectTrigger className={`w-[140px] border-0 h-10 ${statusColors[job.status]}`}>
+            <SelectTrigger className={`w-[150px] border-0 h-10 ${statusColors[job.status]}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -163,6 +164,7 @@ export default function JobDetail() {
               <SelectItem value="Tailoring">Tailoring</SelectItem>
               <SelectItem value="Ready">Ready</SelectItem>
               <SelectItem value="Applied">Applied</SelectItem>
+              <SelectItem value="Not Applying">Not Applying</SelectItem>
             </SelectContent>
           </Select>
 
@@ -202,7 +204,7 @@ export default function JobDetail() {
 
       {/* AI flows */}
       <TailorFlow job={job} alreadyTailored={!!resumeDoc} />
-      <CoverLetterFlow job={job} />
+      <CoverLetterFlow job={job} alreadySaved={!!coverDoc} />
       <AppQuestions job={job} />
 
       {/* Description + documents */}

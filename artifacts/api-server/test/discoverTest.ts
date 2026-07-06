@@ -8,6 +8,7 @@ import {
   DEFAULT_DISCOVER_SETTINGS,
   normaliseSettings,
   buildQueries,
+  isSearchOrIndexPage,
 } from "../src/lib/discover";
 
 async function tableExists(name: string): Promise<boolean> {
@@ -67,6 +68,25 @@ async function main() {
   assert.ok(q.some((s) => /careers/i.test(s)), "no careers-page query");
   assert.ok(q.every((s) => s.includes("SaaS")), "extraKeywords not appended");
   console.log(`OK  buildQueries: ${q.length} queries, region+remote+careers+keywords`);
+
+  // 5. isSearchOrIndexPage: drop search/category/index pages, keep direct postings.
+  const shouldDrop = [
+    "https://www.seek.com.au/head-of-product-jobs",
+    "https://au.indeed.com/jobs?q=head+of+product&l=Brisbane",
+    "https://boards.greenhouse.io/acme/jobs", // listing index root
+    "https://example.com/careers",
+    "https://example.com/careers/search?keywords=product",
+    "https://jobs.example.com/browse/product",
+  ];
+  for (const u of shouldDrop) assert.ok(isSearchOrIndexPage(u), `should drop non-posting: ${u}`);
+  const shouldKeep = [
+    "https://boards.greenhouse.io/acme/jobs/1234567",
+    "https://jobs.lever.co/acme/8f3a1b2c-1111-2222-3333-444455556666",
+    "https://acme.com/careers/head-of-product-brisbane",
+    "https://acme.wd3.myworkdayjobs.com/en-US/careers/job/Brisbane/Head-of-Product_R12345",
+  ];
+  for (const u of shouldKeep) assert.ok(!isSearchOrIndexPage(u), `should keep posting: ${u}`);
+  console.log("OK  isSearchOrIndexPage: drops search/index pages, keeps direct postings");
 
   console.log("\nALL DISCOVER NON-AI CHECKS PASSED");
   process.exit(0);

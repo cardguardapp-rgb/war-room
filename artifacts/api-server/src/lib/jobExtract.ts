@@ -10,7 +10,22 @@ export interface ExtractedJob {
   company: string;
   location: string;
   work_arrangement: WorkArrangement;
+  /** 2–3 sentence high-level orientation on the role. */
+  summary: string;
+  /** Reasons the candidate might not want to continue — [] if a clean fit. */
+  flags: string[];
   posting_text: string;
+}
+
+/**
+ * The candidate's search criteria, passed through so the extraction can judge
+ * seniority/location/exclusion mismatches when raising flags. All optional.
+ */
+export interface JobCriteria {
+  roleTitles?: string[];
+  officeRegion?: string;
+  remoteRule?: string;
+  exclusions?: string[];
 }
 
 const USER_AGENT =
@@ -87,26 +102,62 @@ export async function fetchAndClean(url: string): Promise<FetchResult> {
   return { ok: true, text };
 }
 
-/** Ask the model for the four metadata fields from posting text. */
-async function extractMeta(rawText: string): Promise<{
+/** Build the user message: the posting text, plus the candidate's criteria if given. */
+function extractUserContent(rawText: string, criteria?: JobCriteria): string {
+  const posting = `JOB POSTING TEXT:\n${rawText.slice(0, 60000)}`;
+  const hasCriteria =
+    criteria &&
+    ((criteria.roleTitles && criteria.roleTitles.length) ||
+      criteria.officeRegion ||
+      criteria.remoteRule ||
+      (criteria.exclusions && criteria.exclusions.length));
+  if (!hasCriteria) return posting;
+  const crit = [
+    "CANDIDATE SEARCH CRITERIA (JSON) — judge seniority/location/exclusions against this when flagging:",
+    JSON.stringify(
+      {
+        target_role_levels: criteria!.roleTitles ?? [],
+        office_or_hybrid_must_be_in: criteria!.officeRegion ?? "",
+        otherwise_remote_rule: criteria!.remoteRule ?? "",
+        exclude: criteria!.exclusions ?? [],
+      },
+      null,
+      2,
+    ),
+  ].join("\n");
+  return `${crit}\n\n${posting}`;
+}
+
+/** Ask the model for the metadata fields, plus a summary and honest flags. */
+async function extractMeta(
+  rawText: string,
+  criteria?: JobCriteria,
+): Promise<{
   title: string;
   company: string;
   location: string;
   work_arrangement: WorkArrangement;
+  summary: string;
+  flags: string[];
 }> {
   const p = await createJson<Partial<ExtractedJob>>({
     model: EXTRACT_MODEL,
-    maxTokens: 1024,
+    maxTokens: 1500,
     system: JOB_EXTRACTION_SYSTEM,
-    user: rawText.slice(0, 60000),
+    user: extractUserContent(rawText, criteria),
   });
   const wa = p.work_arrangement;
+  const flags = Array.isArray(p.flags)
+    ? p.flags.map((f) => String(f ?? "").trim()).filter((f) => f.length > 0)
+    : [];
   return {
     title: (p.title ?? "").trim(),
     company: (p.company ?? "").trim(),
     location: (p.location ?? "").trim(),
     work_arrangement:
       wa === "office" || wa === "hybrid" || wa === "remote" ? wa : "unknown",
+    summary: (p.summary ?? "").trim(),
+    flags,
   };
 }
 
@@ -117,13 +168,14 @@ async function extractMeta(rawText: string): Promise<{
  */
 export async function extractFromUrl(
   url: string,
+  criteria?: JobCriteria,
 ): Promise<
   | { ok: true; data: ExtractedJob & { source_url: string } }
   | { ok: false; reason: string }
 > {
   const fetched = await fetchAndClean(url);
   if (!fetched.ok) return { ok: false, reason: fetched.reason };
-  const meta = await extractMeta(fetched.text);
+  const meta = await extractMeta(fetched.text, criteria);
   return {
     ok: true,
     data: { ...meta, posting_text: fetched.text, source_url: url },
@@ -131,7 +183,10 @@ export async function extractFromUrl(
 }
 
 /** Extract from pasted text — the pasted text IS the posting_text. */
-export async function extractFromText(text: string): Promise<ExtractedJob> {
-  const meta = await extractMeta(text);
+export async function extractFromText(
+  text: string,
+  criteria?: JobCriteria,
+): Promise<ExtractedJob> {
+  const meta = await extractMeta(text, criteria);
   return { ...meta, posting_text: text.trim() };
 }

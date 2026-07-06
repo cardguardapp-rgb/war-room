@@ -10,21 +10,31 @@ export const TAILOR_MODEL = "claude-opus-4-8";
 // filtering/judgement task — Sonnet 4.6 is fast and capable enough.
 export const DISCOVER_MODEL = "claude-sonnet-4-6";
 
-export const JOB_EXTRACTION_SYSTEM = `You extract structured metadata from a job advertisement.
+export const JOB_EXTRACTION_SYSTEM = `You extract structured metadata from a job advertisement AND give the candidate a quick, honest read on whether it's worth their time.
 
-You are given the raw text of a job posting (already stripped of navigation and ads). Return a single JSON object and NOTHING else — no prose, no markdown fences.
+You are given the raw text of a job posting (already stripped of navigation and ads). You may also be given the candidate's SEARCH CRITERIA (the kinds of roles, location rule and things they want to avoid). Return a single JSON object and NOTHING else — no prose, no markdown fences.
 
 Shape:
 {
   "title": string,            // the job title, e.g. "Senior Commercial Analyst"; "" if not stated
   "company": string,          // hiring company/organisation name; "" if not stated
   "location": string,         // city/region/country as written, e.g. "Sydney, NSW"; "" if not stated
-  "work_arrangement": "office" | "hybrid" | "remote" | "unknown"
+  "work_arrangement": "office" | "hybrid" | "remote" | "unknown",
+  "summary": string,          // 2–3 plain sentences: what the role is, the seniority, who it's for and what it centres on. Australian English.
+  "flags": string[]           // reasons the candidate might NOT want to continue — [] if none
 }
 
 Rules:
 - Do NOT invent details. If a field is not present in the text, use "" (or "unknown" for work_arrangement).
 - Infer work_arrangement only from explicit signals ("remote", "work from home", "hybrid", "in office", "on-site", "WFH"). If unclear, use "unknown".
+- "summary" is a high-level orientation, not a rewrite of the ad. Two or three sentences, each standing on its own — no run-ons. Say plainly what the job is and at what level.
+- "flags" is the honest "should I even bother?" check. Each entry is ONE short plain-English line. Raise a flag when the posting shows something the candidate would likely want to know before applying, especially:
+  - a seniority mismatch (the role is junior/mid or, conversely, far above what's described in the criteria);
+  - a location or work-arrangement mismatch against the candidate's criteria (e.g. office-based outside their region, or not the full-time remote they need);
+  - a fixed-term/short contract, relocation requirement, or anything on the candidate's exclude list;
+  - other genuine watch-outs (very vague scope, unpaid, obvious red flags, heavy unrelated requirements).
+  Only flag what the text actually supports — do NOT invent concerns. If the role looks like a clean fit, return an empty array. Do not pad the list; 0–4 real flags is normal.
+- If SEARCH CRITERIA are provided, judge seniority/location/exclusions against them. If they are not, still flag objective watch-outs from the posting itself.
 - Output valid JSON only.`;
 
 export const TAILOR_SYSTEM = `You are a SENIOR TECHNICAL RECRUITER with 15+ years placing candidates, and you are reviewing your OWN work before it goes to a hiring manager. Your job: tailor a candidate's real resume to a specific job posting.
@@ -191,10 +201,12 @@ Judge every result against the parameters and return your verdict.
 - SENIORITY: does the role match one of the target role levels OR an equivalent seniority (e.g. "Head of Product" is equivalent to Director of Product, VP Product, Group Product Manager, Product Director, or Chief Product Officer at a smaller company)? Return "yes", "no", or "unsure".
 - LOCATION RULE: apply the candidate's location rule exactly. Typically: if the role requires office attendance (including hybrid), it must sit within the stated office region; otherwise it must explicitly allow full-time remote work from the stated country. If the snippet doesn't make the arrangement or location clear, return "unsure" — do NOT assume.
 - EXCLUSIONS: if a result clearly matches something on the exclude list (e.g. a junior/mid-level role, a short contract, or a role requiring relocation), it is a "no" on seniority or location as appropriate.
+- FIT SCORE: give each kept result a "fit_score" from 1 to 10 — the candidate's overall fit, so they can decide whether it's even worth applying. Weigh seniority match, location/arrangement match, and how well the role otherwise suits the candidate's target roles. Rough guide: 9–10 = strong, on-target match; 6–8 = decent, worth a look; 3–5 = weak or several caveats; 1–2 = poor fit. When a dimension is "unsure", be conservative and don't score above 7. Also give "fit_note": ONE short plain-English line (Australian English) on what drives the score — the main strength and the main caveat, e.g. "On-level and Brisbane-based, but arrangement unclear".
 
 ## What to keep vs discard
-- DISCARD a result entirely (omit it from output) when it is NOT a real, current job posting (e.g. a listing index page, a blog post, a course, a recruiter profile) OR it is a clear non-match on seniority or location.
-- KEEP a result when it is a plausible posting that matches ("yes"), or when you genuinely can't tell ("unsure" on either dimension). Never hide an "unsure" — surface it flagged.
+- The URL must point to ONE SPECIFIC job posting the candidate could open and apply to — ideally on the hiring company's own careers site, its applicant-tracking system (Greenhouse, Lever, Workday, SmartRecruiters, Ashby, BambooHR, etc.), or a recruitment agency's site.
+- DISCARD a result entirely (omit it from output) when it is NOT a single, real, current posting. In particular discard: a job-board or careers SEARCH-RESULTS page, a category/listing/index page ("all jobs", "product manager jobs"), a company careers landing page with no specific role, a blog post, a course, or a recruiter's generic profile. If the link would open a list of roles or a search rather than one advertised role, DISCARD it.
+- KEEP a result when it is a plausible SINGLE posting that matches ("yes"), or when you genuinely can't tell ("unsure" on either dimension). Never hide an "unsure" — surface it flagged.
 
 ## Extraction rules
 - Pull "company", "location" and "work_arrangement" from the title/snippet only. Do NOT invent them. Use "" for unknown text fields and "unknown" for work_arrangement when not evidenced.
@@ -213,6 +225,8 @@ Judge every result against the parameters and return your verdict.
       "work_arrangement": "office" | "hybrid" | "remote" | "unknown",
       "seniority_match": "yes" | "no" | "unsure",
       "location_match": "yes" | "no" | "unsure",
+      "fit_score": number,   // integer 1–10, overall fit
+      "fit_note": string,    // one line on what drives the score
       "reason": string
     }
   ]
