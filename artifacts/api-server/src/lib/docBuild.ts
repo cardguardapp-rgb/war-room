@@ -65,8 +65,14 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
       },
     });
 
+  // Bullet lines are always rendered in regular weight, never bold — even if
+  // the extracted style map says otherwise. Some source documents put the
+  // "•" glyph in its own run with different (often bold) formatting, which
+  // can get sampled into `el.bullet` during parsing; a whole bold bullet
+  // line is never actually the intent, so we hard-override it here as a
+  // defense-in-depth measure independent of parser-side fixes.
   const bulletPara = (text: string, opts?: IParagraphOptions): Paragraph =>
-    para([runFor(`•  ${text}`, el.bullet, 11)], {
+    para([runFor(`•  ${text}`, el.bullet, 11, false)], {
       spacing: { after: 80 },
       indent: { left: 260, hanging: 180 },
       keepLines: true,
