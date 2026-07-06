@@ -250,7 +250,7 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
       sizePt: styleSize(el.sectionHeading, 13),
       bold: el.sectionHeading?.bold ?? true,
       color: hexToRgb(el.sectionHeading?.color ?? null, BLACK),
-      gapAfter: 8,
+      gapAfter: 12,
       indent: 0,
       groupId,
     });
@@ -260,7 +260,7 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
       sizePt: bodySize,
       bold: false,
       color: BLACK,
-      gapAfter: 4,
+      gapAfter: 6,
       indent: 0,
       ...opts,
     });
@@ -274,16 +274,16 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
             sizePt: styleSize(el.name, 22),
             bold: el.name?.bold ?? true,
             color: hexToRgb(el.name?.color ?? null, BLACK),
-            gapAfter: 6,
+            gapAfter: 10,
             indent: 0,
           });
-        line([sec.email, sec.phone, sec.location, ...sec.links, ...sec.otherLines].filter(Boolean).join("  |  "), { gapAfter: 16 });
+        line([sec.email, sec.phone, sec.location, ...sec.links, ...sec.otherLines].filter(Boolean).join("  |  "), { gapAfter: 22 });
         break;
       case "summary": {
         const gid = nextGroupId++;
         heading(sec.heading || "Summary", gid);
-        sec.paragraphs.forEach((p) => line(p, { gapAfter: 10, groupId: gid }));
-        blocks[blocks.length - 1].gapAfter = 16;
+        sec.paragraphs.forEach((p) => line(p, { gapAfter: 14, groupId: gid }));
+        blocks[blocks.length - 1].gapAfter = 22;
         break;
       }
       case "experience": {
@@ -294,14 +294,15 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
             bold: el.jobTitle?.bold ?? true,
             sizePt: styleSize(el.jobTitle, bodySize),
             color: hexToRgb(el.jobTitle?.color ?? null, BLACK),
+            gapAfter: 4,
             groupId: gid,
           });
           const meta = [it.dates, it.location].filter(Boolean).join("  ·  ");
-          if (meta) line(meta, { groupId: gid });
+          if (meta) line(meta, { gapAfter: 10, groupId: gid });
           it.bullets.forEach((b) =>
-            line(b, { indent: 14, hangingIndent: 12, bullet: "•", gapAfter: 4, groupId: gid }),
+            line(b, { indent: 16, hangingIndent: 14, bullet: "•", gapAfter: 8, groupId: gid }),
           );
-          if (blocks.length) blocks[blocks.length - 1].gapAfter = 14;
+          if (blocks.length) blocks[blocks.length - 1].gapAfter = 20;
         });
         break;
       }
@@ -309,19 +310,33 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
         heading(sec.heading || "Education");
         sec.items.forEach((it) => {
           const gid = nextGroupId++;
-          line([it.institution, it.qualification].filter(Boolean).join(" — "), { bold: true, groupId: gid });
+          line([it.institution, it.qualification].filter(Boolean).join(" — "), {
+            bold: true,
+            gapAfter: 4,
+            groupId: gid,
+          });
           const meta = [it.dates, it.location].filter(Boolean).join("  ·  ");
-          if (meta) line(meta, { groupId: gid });
+          if (meta) line(meta, { gapAfter: 10, groupId: gid });
           it.details.forEach((d) =>
-            line(d, { indent: 14, hangingIndent: 12, bullet: "•", groupId: gid }),
+            line(d, { indent: 16, hangingIndent: 14, bullet: "•", gapAfter: 8, groupId: gid }),
           );
-          if (blocks.length) blocks[blocks.length - 1].gapAfter = 14;
+          if (blocks.length) blocks[blocks.length - 1].gapAfter = 20;
         });
         break;
       }
       case "skills":
         heading(sec.heading || "Skills");
-        line(sec.items.join(", ") + ".", { gapAfter: 16 });
+        // One skill per bulleted line (matching the primary .docx renderer)
+        // so the list reads as organised, scannable items rather than a
+        // dense comma-separated paragraph.
+        sec.items.forEach((s, i) =>
+          line(s, {
+            indent: 16,
+            hangingIndent: 14,
+            bullet: "•",
+            gapAfter: i === sec.items.length - 1 ? 22 : 8,
+          }),
+        );
         break;
       case "other":
         heading(sec.heading || "Other");

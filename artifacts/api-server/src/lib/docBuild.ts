@@ -4,14 +4,23 @@ import {
   Paragraph,
   TextRun,
   BorderStyle,
+  TabStopType,
   type IParagraphOptions,
 } from "docx";
 import type { ResumeJson, StyleEntry, StyleMap } from "./resumeParser";
 import type { CoverLetterFull } from "./coverLetters";
 
 // ATS-safe: single column, real paragraphs + text runs, no tables/text boxes/
-// images. Fonts, sizes, colours and bold weights come from the Phase 2 style
-// map so the output matches the candidate's original resume.
+// images. Sizes, colours and bold weights come from the Phase 2 style map so
+// the output matches the candidate's original resume, but the font family is
+// always overridden to a clean sans-serif (see `SANS_SERIF_FONT`) regardless
+// of what the source document used, per user preference for readability.
+
+/** Always-sans-serif output font — overrides whatever the source docx used. */
+const SANS_SERIF_FONT = "Calibri";
+
+/** Bullet hanging-indent distance (twips) shared by bullet text and its tab stop. */
+const BULLET_INDENT = 320;
 
 function hex(color: string | null | undefined): string | undefined {
   if (!color) return undefined;
@@ -25,7 +34,6 @@ function halfPt(sizePt: number | null | undefined, fallback: number): number {
 
 export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Buffer> {
   const el = style.elements;
-  const bodyFont = el.body?.fontFamily ?? style.defaults.fontFamily ?? undefined;
 
   const runFor = (
     text: string,
@@ -35,7 +43,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
   ): TextRun =>
     new TextRun({
       text,
-      font: entry?.fontFamily ?? bodyFont,
+      font: SANS_SERIF_FONT,
       size: halfPt(entry?.fontSizePt, fallbackPt),
       bold: boldOverride ?? entry?.bold ?? false,
       italics: entry?.italic ?? false,
@@ -52,7 +60,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
   const headingPara = (text: string): Paragraph =>
     new Paragraph({
       children: [runFor(text.toUpperCase(), el.sectionHeading, 13, el.sectionHeading?.bold ?? true)],
-      spacing: { before: 320, after: 120 },
+      spacing: { before: 420, after: 160 },
       keepNext: true,
       keepLines: true,
       border: {
@@ -71,10 +79,17 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
   // can get sampled into `el.bullet` during parsing; a whole bold bullet
   // line is never actually the intent, so we hard-override it here as a
   // defense-in-depth measure independent of parser-side fixes.
+  //
+  // The bullet glyph and its text are separated by a real tab stop (rather
+  // than literal spaces) landing exactly at the hanging-indent distance, so
+  // the gap between "•" and the text is always a single, consistent width —
+  // literal spaces would drift depending on font metrics and could look like
+  // a stray extra space before the text starts.
   const bulletPara = (text: string, opts?: IParagraphOptions): Paragraph =>
-    para([runFor(`•  ${text}`, el.bullet, 11, false)], {
-      spacing: { after: 80 },
-      indent: { left: 260, hanging: 180 },
+    para([runFor(`•\t${text}`, el.bullet, 11, false)], {
+      spacing: { after: 140, line: 280 },
+      indent: { left: BULLET_INDENT, hanging: BULLET_INDENT },
+      tabStops: [{ type: TabStopType.LEFT, position: BULLET_INDENT }],
       keepLines: true,
       ...opts,
     });
@@ -87,7 +102,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
         if (sec.name) {
           children.push(
             para([runFor(sec.name, el.name, 22, el.name?.bold ?? true)], {
-              spacing: { after: 60 },
+              spacing: { after: 100 },
               keepNext: true,
             }),
           );
@@ -95,7 +110,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
         const contact = [sec.email, sec.phone, sec.location, ...sec.links, ...sec.otherLines]
           .filter(Boolean)
           .join("   |   ");
-        if (contact) children.push(para([runFor(contact, el.body, 11)], { spacing: { after: 240 } }));
+        if (contact) children.push(para([runFor(contact, el.body, 11)], { spacing: { after: 320 } }));
         break;
       }
       case "summary": {
@@ -103,7 +118,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
         sec.paragraphs.forEach((p, i) =>
           children.push(
             para([runFor(p, el.body, 11)], {
-              spacing: { after: i === sec.paragraphs.length - 1 ? 240 : 140 },
+              spacing: { after: i === sec.paragraphs.length - 1 ? 320 : 200, line: 300 },
               keepLines: true,
             }),
           ),
@@ -118,7 +133,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
           if (titleText)
             entryParas.push(
               para([runFor(titleText, el.jobTitle, 12, el.jobTitle?.bold ?? true)], {
-                spacing: { before: idx === 0 ? 60 : 220, after: 20 },
+                spacing: { before: idx === 0 ? 80 : 300, after: 40 },
                 keepNext: true,
                 keepLines: true,
               }),
@@ -127,7 +142,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
           if (meta)
             entryParas.push(
               para([runFor(meta, el.body, 10)], {
-                spacing: { after: 80 },
+                spacing: { after: 140 },
                 keepNext: it.bullets.length > 0,
                 keepLines: true,
               }),
@@ -147,7 +162,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
           if (line)
             entryParas.push(
               para([runFor(line, el.jobTitle, 12, true)], {
-                spacing: { before: idx === 0 ? 60 : 220, after: 20 },
+                spacing: { before: idx === 0 ? 80 : 300, after: 40 },
                 keepNext: true,
                 keepLines: true,
               }),
@@ -156,7 +171,7 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
           if (meta)
             entryParas.push(
               para([runFor(meta, el.body, 10)], {
-                spacing: { after: 80 },
+                spacing: { after: 140 },
                 keepNext: it.details.length > 0,
                 keepLines: true,
               }),
@@ -170,19 +185,20 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
       }
       case "skills": {
         children.push(headingPara(sec.heading || "Skills"));
-        if (sec.items.length)
-          children.push(
-            para([runFor(sec.items.join(", ") + ".", el.body, 11)], {
-              spacing: { after: 240, line: 300 },
-              keepLines: true,
-            }),
-          );
+        // Rendered as one skill per bulleted line (rather than a single long
+        // comma-separated paragraph) so the list reads as an organised,
+        // scannable set of items instead of a dense wall of text.
+        sec.items.forEach((s, i) =>
+          children.push(bulletPara(s, { keepNext: i < sec.items.length - 1 })),
+        );
         break;
       }
       case "other": {
         children.push(headingPara(sec.heading || "Other"));
         sec.paragraphs.forEach((p) =>
-          children.push(para([runFor(p, el.body, 11)], { spacing: { after: 120 }, keepLines: true })),
+          children.push(
+            para([runFor(p, el.body, 11)], { spacing: { after: 200, line: 300 }, keepLines: true }),
+          ),
         );
         sec.bullets.forEach((b) => children.push(bulletPara(b)));
         break;
@@ -207,23 +223,24 @@ export function buildCoverLetterDocx(
   style: StyleMap,
 ): Promise<Buffer> {
   const el = style.elements;
-  const bodyFont = el.body?.fontFamily ?? style.defaults.fontFamily ?? undefined;
   const size = halfPt(el.body?.fontSizePt, 11);
 
   const run = (text: string, bold = false): TextRun =>
-    new TextRun({ text, font: bodyFont, size, bold, color: hex(el.body?.color) });
+    new TextRun({ text, font: SANS_SERIF_FONT, size, bold, color: hex(el.body?.color) });
 
   const children: Paragraph[] = [];
   if (full.salutation)
-    children.push(new Paragraph({ children: [run(full.salutation)], spacing: { after: 200 } }));
+    children.push(new Paragraph({ children: [run(full.salutation)], spacing: { after: 240 } }));
   if (full.re)
-    children.push(new Paragraph({ children: [run(full.re, true)], spacing: { after: 200 } }));
+    children.push(new Paragraph({ children: [run(full.re, true)], spacing: { after: 240 } }));
   full.body
     .split(/\n{2,}/)
     .map((p) => p.trim())
     .filter(Boolean)
-    .forEach((p) => children.push(new Paragraph({ children: [run(p)], spacing: { after: 160 } })));
-  children.push(new Paragraph({ children: [run("Sincerely,")], spacing: { after: 40 } }));
+    .forEach((p) =>
+      children.push(new Paragraph({ children: [run(p)], spacing: { after: 200, line: 300 } })),
+    );
+  children.push(new Paragraph({ children: [run("Sincerely,")], spacing: { after: 60 } }));
   if (name) children.push(new Paragraph({ children: [run(name)] }));
 
   const doc = new Document({
