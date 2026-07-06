@@ -201,7 +201,7 @@ export default function JobDetail() {
       </div>
 
       {/* AI flows */}
-      <TailorFlow job={job} />
+      <TailorFlow job={job} alreadyTailored={!!resumeDoc} />
       <CoverLetterFlow job={job} />
       <AppQuestions job={job} />
 

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job, type Profile } from "../lib/db";
 import { serializeJob, serializeDocument } from "../lib/serialize";
+import { deleteObject } from "../lib/objectStore";
 import { aiErrorResponse } from "../lib/anthropic";
 import { extractFromText, extractFromUrl } from "../lib/jobExtract";
 import { runTailor, type QaPair } from "../lib/tailor";
@@ -357,6 +358,9 @@ router.post("/jobs/:id/tailor/revise", async (req, res): Promise<void> => {
 });
 
 // Approve — save the tailored resume as a document and mark the job Ready.
+// Re-tailoring is supported: any previous tailored resume for this job (and its
+// cached .docx/.pdf objects) is replaced, so re-doing a resume never piles up
+// duplicates — the job always has exactly one current tailored resume.
 router.post("/jobs/:id/tailor/approve", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
@@ -373,13 +377,39 @@ router.post("/jobs/:id/tailor/approve", async (req, res): Promise<void> => {
     return;
   }
 
+  // Remove any previous tailored resume(s) for this job first, plus their
+  // cached files in object storage. Only 'resume' docs are touched — cover
+  // letters and notes are left alone.
+  const priorResumes = await db
+    .select()
+    .from(documentsTable)
+    .where(and(eq(documentsTable.jobId, id), eq(documentsTable.type, "resume")));
+  if (priorResumes.length > 0) {
+    await db
+      .delete(documentsTable)
+      .where(and(eq(documentsTable.jobId, id), eq(documentsTable.type, "resume")));
+    const staleKeys = priorResumes
+      .flatMap((d) => [d.docxObjectKey, d.pdfObjectKey])
+      .filter((k): k is string => Boolean(k));
+    await Promise.all(
+      staleKeys.map((key) =>
+        deleteObject(key).catch((err) =>
+          req.log.warn({ err, key }, "Failed to delete old resume object"),
+        ),
+      ),
+    );
+  }
+
   const [document] = await db
     .insert(documentsTable)
     .values({ jobId: id, type: "resume", contentJson: proposed_resume })
     .returning();
   await db.update(jobsTable).set({ status: "Ready" }).where(eq(jobsTable.id, id));
 
-  req.log.info({ jobId: id }, "Tailored resume approved and saved");
+  req.log.info(
+    { jobId: id, replaced: priorResumes.length },
+    "Tailored resume approved and saved",
+  );
   res.status(201).json(serializeDocument(document));
 });
 

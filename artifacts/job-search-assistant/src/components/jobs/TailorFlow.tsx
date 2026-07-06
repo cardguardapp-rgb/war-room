@@ -50,7 +50,14 @@ const REVISE_STAGES = [
   "Finishing up…",
 ];
 
-export function TailorFlow({ job }: { job: Job }) {
+export function TailorFlow({
+  job,
+  alreadyTailored = false,
+}: {
+  job: Job;
+  /** True when this job already has a saved tailored resume (enables re-tailor UI). */
+  alreadyTailored?: boolean;
+}) {
   const { data: profile } = useProfile();
   const start = useTailorStart();
   const recordQa = useRecordQa();
@@ -183,13 +190,15 @@ export function TailorFlow({ job }: { job: Job }) {
     return (
       <div className="rounded-2xl border border-primary/20 bg-primary/5 p-6 shadow-sm space-y-4">
         <div className="flex items-center gap-2 text-primary">
-          <Sparkles className="w-5 h-5" />
-          <h3 className="font-semibold text-lg">Tailor your resume</h3>
+          {alreadyTailored ? <RefreshCw className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+          <h3 className="font-semibold text-lg">
+            {alreadyTailored ? "Re-tailor your resume" : "Tailor your resume"}
+          </h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          A senior-recruiter pass reworks your real resume to this posting — honest
-          feedback included. It never invents experience; it asks you when a fact is
-          missing.
+          {alreadyTailored
+            ? "You've already saved a tailored resume for this job. Re-tailoring regenerates the wording from scratch with the latest improvements and replaces the saved version. It still never invents experience — it asks when a fact is missing."
+            : "A senior-recruiter pass reworks your real resume to this posting — honest feedback included. It never invents experience; it asks you when a fact is missing."}
         </p>
         {!hasResume && (
           <div className="flex items-start gap-2 rounded-xl border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
@@ -219,6 +228,10 @@ export function TailorFlow({ job }: { job: Job }) {
           {start.isPending ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Analysing the role…
+            </>
+          ) : alreadyTailored ? (
+            <>
+              <RefreshCw className="w-4 h-4 mr-2" /> Re-tailor resume
             </>
           ) : (
             <>
