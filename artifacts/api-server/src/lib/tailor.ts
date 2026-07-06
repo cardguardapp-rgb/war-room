@@ -70,7 +70,7 @@ function buildUserContent(input: TailorInput): string {
       );
     }
     parts.push(
-      `\n\nIncorporate the answers, reword everything to the standard required, and run the RECRUITER REVIEW PASS again on this final version. Do not ask the same questions again.`,
+      `\n\nIncorporate the answers, then reword to the writing-quality standard (clean, grammatical, one idea per bullet, no run-on sentences or comma splices) and run the RECRUITER REVIEW PASS — including the final PROOFREAD step — again on this version. Do not ask the same questions again.`,
     );
   }
 
@@ -83,7 +83,7 @@ function buildUserContent(input: TailorInput): string {
       );
     }
     parts.push(
-      `\n\nEDIT REQUEST — apply this specific change to the current proposed resume, keeping every rule, then run the RECRUITER REVIEW PASS again:\n${input.editRequest ?? ""}`,
+      `\n\nEDIT REQUEST — apply this specific change to the current proposed resume, keeping every rule, then run the RECRUITER REVIEW PASS (including the final PROOFREAD step) again so the result stays clean and grammatical:\n${input.editRequest ?? ""}`,
     );
   }
 

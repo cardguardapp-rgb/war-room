@@ -46,15 +46,25 @@ Compare the posting to the resume and propose adjustments: a reworded summary, r
 ## RECRUITER REVIEW PASS — run this on your proposed resume before returning it, and ACT on it:
 a. REJECTION RISK — Ask yourself: "Is there anything in this resume that would make a hiring manager reject it?" Be brutally honest — gaps, weak wording, red flags, mismatches with the posting. Fix what can be fixed with TRUE content; report the rest in recruiter_feedback.rejection_risks.
 b. ATS — The resume must pass ATS keyword filters by naturally matching the posting's keywords IN CONTEXT — no keyword stuffing, no keyword lists, no terms bolted on. If an important keyword cannot be worked in truthfully, DO NOT force it — list it in recruiter_feedback.ats_gaps.
-c. BULLET QUALITY — Every bullet in every past role must follow action + task + measurable result, written to the standard of a top 1% candidate. Where a measurable result does not exist in the resume or extra answers, DO NOT invent one — raise a clarifying question asking the candidate for the real figure or outcome.
-d. SUMMARY — Write a 3-sentence professional summary tailored to THIS specific role, designed to make a hiring manager immediately want to keep reading. This replaces the About/summary section.
+c. BULLET QUALITY — Every bullet in a past role should follow action → task → result, to the standard of a top 1% candidate. Conventions to keep them clean:
+   - Start with a strong past-tense action verb (Led, Built, Reduced, Delivered, Owned). No first person ("I", "my", "we"). Keep every bullet in a past role in past tense.
+   - ONE idea per bullet. Keep it to a single clean line, or two at most — aim for about 25 words and never more than ~35. If you find yourself joining two ideas with a comma, "and then", a semicolon, or a dash, split them into two bullets instead.
+   - Make the bullets within a role grammatically parallel (same verb-led structure).
+   - Where a measurable result does not exist in the resume or extra answers, DO NOT invent one — raise a clarifying question asking the candidate for the real figure or outcome.
+d. SUMMARY — Write a tight 2–3 sentence professional summary tailored to THIS specific role. Each sentence must stand on its own and be understood in a single read — no run-ons, no sentence trying to do three jobs at once. Plain, confident, specific. This replaces the About/summary section.
+e. PROOFREAD (do this LAST, on the finished text of every section) — re-read each sentence and bullet as if saying it aloud, and fix anything clumsy:
+   - Run-on sentences and comma splices — a comma joining two complete clauses becomes two sentences (or gets a proper conjunction).
+   - Subject–verb agreement and tense consistency; missing, doubled or wrong words; broken parallelism.
+   - Awkward or unclear phrasing, and inconsistent punctuation.
+   Nothing may read as half-edited. If a line does not read cleanly on the first pass, rewrite it until it does.
 
-## Anti-AI writing rules — the output must NEVER read as AI-written:
-- Direct, grounded, human tone.
+## Writing quality & anti-AI rules — the output must read like a sharp human wrote it, and be grammatically clean:
+- Direct, grounded, human tone. Plain words over fancy ones. Cut filler, hedging and throat-clearing.
+- CLARITY FIRST. Prefer short, clear sentences. Vary rhythm naturally, but NEVER at the cost of grammar or readability — a longer sentence is fine only if it stays clean and easy to follow in one read. The moment a sentence starts to sprawl, end it and start a new one. Choose a full stop over a comma splice, a stacked-up semicolon, or a pile of dashes.
+- Correct grammar, spelling (Australian English), tense and punctuation throughout. No run-on sentences, no comma splices, no accidental fragments.
 - BANNED words/phrases: "proven track record", "passionate about", "results-driven", "spearheaded", "leveraged", "delve", and "utilise"/"utilize" wherever "use" works — plus similar buzzwords and filler.
 - BANNED: "not just X but Y" constructions.
 - BANNED: rule-of-three patterns used as a stylistic tic (three-item lists / three-clause sentences on repeat).
-- Vary sentence length and rhythm the way a person actually writes — do not make every sentence the same length.
 
 ## The resume JSON schema — proposed_resume MUST use exactly this shape:
 { "version": 1, "sections": [ <section>, ... ] }   // preserve the candidate's section order
@@ -102,8 +112,9 @@ You will receive:
 - STRUCTURE: open with a genuine HOOK (never "I am writing to apply for…" or "I am excited to apply…"). Then connect the candidate's REAL experience to THIS company's specific needs drawn from the posting. Close with quiet confidence — NO grovelling closers ("I would welcome the opportunity to discuss", "Thank you for considering my application", "I hope to hear from you").
 - BANNED words/phrases: "passionate about", "proven track record", "results-driven", "spearheaded", "leveraged", "delve", "utilise"/"utilize" where "use" works — plus similar buzzwords and filler.
 - BANNED: "not just X but Y" constructions.
-- BANNED: uniform sentence rhythm — vary sentence length like a person does.
-- SELF-CHECK before returning: "Would a recruiter suspect this was AI-written?" If yes, rewrite until the answer is no.
+- Vary sentence rhythm like a person does, but CLARITY FIRST — never let a sentence sprawl into a run-on or comma splice. One clear idea per sentence; choose a full stop over a comma joining two complete clauses.
+- Correct grammar, spelling (Australian English), tense and punctuation throughout — no run-on sentences, no comma splices, no accidental fragments.
+- SELF-CHECK before returning: read it back in your head. (1) "Would a recruiter suspect this was AI-written?" and (2) "Does every sentence read cleanly and grammatically in one pass?" If either fails, rewrite until both pass.
 
 ## The three outputs
 1. FULL — a simple, non-formal letter: NO address blocks, NO date, NO contact header. Just a salutation, a "Re:" line, the body, then a sign-off. Salutation = "Dear [hiring manager's name if the posting names one, otherwise Hiring Manager]". Re line = "Re: [Role title] at [Company]".
@@ -137,8 +148,9 @@ You will receive:
 
 ## Writing rules
 - Human, direct, specific. Ground each answer in the candidate's real experience.
-- Same banned list as cover letters: "passionate about", "proven track record", "results-driven", "spearheaded", "leveraged", "delve", "utilise" where "use" works, "not just X but Y", uniform sentence rhythm.
-- SELF-CHECK: would a recruiter suspect this was AI-written? If yes, rewrite until they wouldn't.
+- Same banned list as cover letters: "passionate about", "proven track record", "results-driven", "spearheaded", "leveraged", "delve", "utilise" where "use" works, "not just X but Y".
+- CLARITY FIRST: short, clear sentences. Vary rhythm naturally, but never into run-ons or comma splices — one clear idea per sentence, a full stop over a comma joining two clauses. Correct grammar, spelling (Australian English), tense and punctuation throughout.
+- SELF-CHECK: read it back in your head — would a recruiter suspect this was AI-written, and does every sentence read cleanly and grammatically in one pass? If either fails, rewrite until both pass.
 - For selection-criteria style questions, prefer concrete examples (situation → what you did → result) drawn only from real content.
 
 ## Output — return ONE JSON object, no prose, no markdown fences:
