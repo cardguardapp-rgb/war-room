@@ -97,9 +97,14 @@ export async function docxToPdf(docx: Buffer): Promise<Buffer> {
 }
 
 // --------------------------------------------------------------------------
-// pdf-lib fallback — used only if LibreOffice can't be resolved. Not a pixel
-// match for the .docx (Calibri -> Helvetica), but a clean single-column PDF.
+// pdf-lib fallback — used only if LibreOffice can't be resolved. Uses
+// pdf-lib's built-in Helvetica (a standard sans-serif PDF font, always
+// available with no font-substitution risk), so it's not a pixel match for
+// the .docx but is a clean, always-sans-serif single-column PDF.
 // --------------------------------------------------------------------------
+
+/** Skills are capped so the list stays scannable instead of sprawling. */
+const MAX_SKILLS = 10;
 
 interface Block {
   text: string;
@@ -324,20 +329,20 @@ function resumeBlocks(resume: ResumeJson, style: StyleMap): Block[] {
         });
         break;
       }
-      case "skills":
+      case "skills": {
         heading(sec.heading || "Skills");
-        // One skill per bulleted line (matching the primary .docx renderer)
-        // so the list reads as organised, scannable items rather than a
+        // Capped and grouped a few per line (matching the primary .docx
+        // renderer) — still plain text lines, so it stays ATS-safe, but
+        // reads as a compact, organised block instead of a long list or a
         // dense comma-separated paragraph.
-        sec.items.forEach((s, i) =>
-          line(s, {
-            indent: 16,
-            hangingIndent: 14,
-            bullet: "•",
-            gapAfter: i === sec.items.length - 1 ? 22 : 8,
-          }),
+        const capped = sec.items.slice(0, MAX_SKILLS);
+        const rows: string[][] = [];
+        for (let i = 0; i < capped.length; i += 3) rows.push(capped.slice(i, i + 3));
+        rows.forEach((row, i) =>
+          line(row.join("   ·   "), { gapAfter: i === rows.length - 1 ? 16 : 6 }),
         );
         break;
+      }
       case "other":
         heading(sec.heading || "Other");
         sec.paragraphs.forEach((p) => line(p, { gapAfter: 4 }));

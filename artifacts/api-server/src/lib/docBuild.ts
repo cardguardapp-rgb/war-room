@@ -15,12 +15,27 @@ import type { CoverLetterFull } from "./coverLetters";
 // the output matches the candidate's original resume, but the font family is
 // always overridden to a clean sans-serif (see `SANS_SERIF_FONT`) regardless
 // of what the source document used, per user preference for readability.
-
-/** Always-sans-serif output font — overrides whatever the source docx used. */
-const SANS_SERIF_FONT = "Calibri";
+//
+// IMPORTANT: this name must be a font that is actually installed in the
+// container LibreOffice runs in (`fc-list`). This box only ships DejaVu Sans
+// / DejaVu Serif — no Calibri, Arial, or Helvetica. Requesting a font that
+// isn't installed causes LibreOffice to silently substitute *something*
+// (which is not guaranteed to be sans-serif), so we point directly at the
+// installed sans family rather than a common Windows/Mac font name.
+const SANS_SERIF_FONT = "DejaVu Sans";
 
 /** Bullet hanging-indent distance (twips) shared by bullet text and its tab stop. */
 const BULLET_INDENT = 320;
+
+/** Skills are capped so the list stays scannable instead of sprawling. */
+const MAX_SKILLS = 10;
+
+/** Group items into fixed-size chunks, e.g. for a compact multi-per-line skills layout. */
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
 
 function hex(color: string | null | undefined): string | undefined {
   if (!color) return undefined;
@@ -185,11 +200,22 @@ export function buildResumeDocx(resume: ResumeJson, style: StyleMap): Promise<Bu
       }
       case "skills": {
         children.push(headingPara(sec.heading || "Skills"));
-        // Rendered as one skill per bulleted line (rather than a single long
-        // comma-separated paragraph) so the list reads as an organised,
-        // scannable set of items instead of a dense wall of text.
-        sec.items.forEach((s, i) =>
-          children.push(bulletPara(s, { keepNext: i < sec.items.length - 1 })),
+        // Capped at MAX_SKILLS and laid out as short, evenly-grouped lines
+        // (a few skills per line, separated by a middle dot) rather than one
+        // bullet per skill or one giant comma-separated paragraph. This is
+        // still plain paragraphs/text runs (no tables/columns), so it stays
+        // ATS-safe, but reads as a compact, organised block instead of a
+        // long list or a wall of text.
+        const capped = sec.items.slice(0, MAX_SKILLS);
+        const rows = chunk(capped, 3);
+        rows.forEach((row, i) =>
+          children.push(
+            para([runFor(row.join("   ·   "), el.body, 11)], {
+              spacing: { after: i === rows.length - 1 ? 320 : 140, line: 300 },
+              keepLines: true,
+              keepNext: i < rows.length - 1,
+            }),
+          ),
         );
         break;
       }
