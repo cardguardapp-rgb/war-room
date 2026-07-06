@@ -124,10 +124,9 @@ export function CoverLetterFlow({ job }: { job: Job }) {
     );
   };
 
-  const save = () => {
-    if (!result) return;
+  const doApprove = (res: CoverLetterResult) => {
     approve.mutate(
-      { id: job.id, data: { full: result.full, short: result.short } },
+      { id: job.id, data: { full: res.full, short: res.short } },
       {
         onSuccess: () => {
           setPhase("saved");
@@ -136,6 +135,29 @@ export function CoverLetterFlow({ job }: { job: Job }) {
         onError: (err) => toast.error("Could not save", { description: err.message }),
       },
     );
+  };
+
+  const save = () => {
+    if (!result) return;
+    const pending = editText.trim();
+    // If the user typed a requested change but didn't click "Apply edit" first,
+    // apply it now so saving always includes that change (regenerate, then save).
+    if (pending) {
+      setError(null);
+      revise.mutate(
+        { id: job.id, data: { current: result, edit_request: pending } },
+        {
+          onSuccess: (res) => {
+            setResult(res);
+            setEditText("");
+            doApprove(res);
+          },
+          onError: (err) => setError(err.message),
+        },
+      );
+      return;
+    }
+    doApprove(result);
   };
 
   const reset = () => {
@@ -313,6 +335,12 @@ export function CoverLetterFlow({ job }: { job: Job }) {
               )}
             </Button>
           </div>
+          {editText.trim() && !revise.isPending && (
+            <p className="text-xs text-muted-foreground">
+              This change isn't applied yet — click <b>Apply edit</b> to preview it, or just{" "}
+              <b>Save</b> below (saving applies it first).
+            </p>
+          )}
           {revise.isPending && <AiProgress stages={REVISE_STAGES} />}
         </div>
 
@@ -323,9 +351,17 @@ export function CoverLetterFlow({ job }: { job: Job }) {
             <RotateCcw className="w-4 h-4 mr-2" /> Start over
           </Button>
           <Button onClick={save} disabled={approve.isPending || revise.isPending} className="rounded-xl px-8">
-            {approve.isPending ? (
+            {revise.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Applying change…
+              </>
+            ) : approve.isPending ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…
+              </>
+            ) : editText.trim() ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2" /> Apply change &amp; save
               </>
             ) : (
               <>

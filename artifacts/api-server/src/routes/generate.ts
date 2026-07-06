@@ -1,6 +1,8 @@
 import { Router, type IRouter, type Response } from "express";
-import { db, eq, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job } from "../lib/db";
+import { inArray } from "drizzle-orm";
+import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job } from "../lib/db";
 import { serializeDocument } from "../lib/serialize";
+import { deleteObject } from "../lib/objectStore";
 import { aiErrorResponse } from "../lib/anthropic";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
@@ -161,6 +163,29 @@ router.post("/jobs/:id/cover-letters/approve", async (req, res): Promise<void> =
   if (!full || typeof full.body !== "string" || full.body.trim().length === 0) {
     res.status(400).json({ error: "Missing the cover letter to save." });
     return;
+  }
+
+  // Replace any previous cover-letter set for this job (+ cached files), so
+  // editing and re-saving updates the letters instead of piling up duplicates.
+  const coverTypes = ["cover_letter", "cover_letter_plain", "cover_note"] as const;
+  const priorCover = await db
+    .select()
+    .from(documentsTable)
+    .where(and(eq(documentsTable.jobId, id), inArray(documentsTable.type, [...coverTypes])));
+  if (priorCover.length > 0) {
+    await db
+      .delete(documentsTable)
+      .where(and(eq(documentsTable.jobId, id), inArray(documentsTable.type, [...coverTypes])));
+    const staleKeys = priorCover
+      .flatMap((d) => [d.docxObjectKey, d.pdfObjectKey])
+      .filter((k): k is string => Boolean(k));
+    await Promise.all(
+      staleKeys.map((key) =>
+        deleteObject(key).catch((err) =>
+          req.log.warn({ err, key }, "Failed to delete old cover-letter object"),
+        ),
+      ),
+    );
   }
 
   const documents = await db
