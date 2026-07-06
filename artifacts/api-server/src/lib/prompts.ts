@@ -21,12 +21,15 @@ Shape:
   "location": string,         // city/region/country as written, e.g. "Sydney, NSW"; "" if not stated
   "work_arrangement": "office" | "hybrid" | "remote" | "unknown",
   "summary": string,          // 2–3 plain sentences: what the role is, the seniority, who it's for and what it centres on. Australian English.
-  "flags": string[]           // reasons the candidate might NOT want to continue — [] if none
+  "flags": string[],          // reasons the candidate might NOT want to continue — [] if none
+  "fit_score": number,        // integer 1–10, the candidate's overall fit for this role
+  "fit_note": string          // ONE short line on what drives the score (main strength + main caveat)
 }
 
 Rules:
 - Do NOT invent details. If a field is not present in the text, use "" (or "unknown" for work_arrangement).
 - Infer work_arrangement only from explicit signals ("remote", "work from home", "hybrid", "in office", "on-site", "WFH"). If unclear, use "unknown".
+- "fit_score" is the candidate's overall fit so they can decide whether it's worth applying at all. Weigh seniority match, location/work-arrangement match (against the criteria if given), and how well the role otherwise suits their target roles. Rough guide: 9–10 = strong, on-target; 6–8 = decent, worth a look; 3–5 = weak or several caveats; 1–2 = poor fit. If there are real flags, the score should reflect them (a seniority or location mismatch usually means 4 or below). "fit_note" is ONE plain-English line (Australian English) on what drives the score — the main strength and the main caveat, e.g. "On-level Head of Product, but Sydney office-based — outside your area".
 - "summary" is a high-level orientation, not a rewrite of the ad. Two or three sentences, each standing on its own — no run-ons. Say plainly what the job is and at what level.
 - "flags" is the honest "should I even bother?" check. Each entry is ONE short plain-English line. Raise a flag when the posting shows something the candidate would likely want to know before applying, especially:
   - a seniority mismatch (the role is junior/mid or, conversely, far above what's described in the criteria);
@@ -202,11 +205,12 @@ Judge every result against the parameters and return your verdict.
 - LOCATION RULE: apply the candidate's location rule exactly. Typically: if the role requires office attendance (including hybrid), it must sit within the stated office region; otherwise it must explicitly allow full-time remote work from the stated country. If the snippet doesn't make the arrangement or location clear, return "unsure" — do NOT assume.
 - EXCLUSIONS: if a result clearly matches something on the exclude list (e.g. a junior/mid-level role, a short contract, or a role requiring relocation), it is a "no" on seniority or location as appropriate.
 - FIT SCORE: give each kept result a "fit_score" from 1 to 10 — the candidate's overall fit, so they can decide whether it's even worth applying. Weigh seniority match, location/arrangement match, and how well the role otherwise suits the candidate's target roles. Rough guide: 9–10 = strong, on-target match; 6–8 = decent, worth a look; 3–5 = weak or several caveats; 1–2 = poor fit. When a dimension is "unsure", be conservative and don't score above 7. Also give "fit_note": ONE short plain-English line (Australian English) on what drives the score — the main strength and the main caveat, e.g. "On-level and Brisbane-based, but arrangement unclear".
+- RECENCY: the candidate only wants CURRENT roles (posted within roughly the last month). Look for any date or age signal in the title/snippet (an explicit date, or "Posted N days/weeks/months ago", "N months ago"). If a result is clearly OLDER than about one month, DISCARD it (omit from output). If there is no date signal at all, KEEP it — you can't tell. Put whatever date/age signal you found in "posted" (e.g. "Posted 2 weeks ago", "15 Jun 2026"); use "" if none is evident. Do NOT invent a date.
 
 ## What to keep vs discard
 - PREFER results that point to ONE SPECIFIC job posting the candidate could open and apply to — ideally on the hiring company's own careers site, its applicant-tracking system (Greenhouse, Lever, Workday, SmartRecruiters, Ashby, BambooHR, etc.), or a recruitment agency's site.
-- DISCARD a result (omit it from output) only when it is clearly NOT a single job posting — a search-results page, a blog post, a course, a recruiter's generic profile — OR it is a clear non-match on seniority or location.
-- KEEP a result when it is a plausible posting that matches ("yes"), or when you genuinely can't tell whether it matches ("unsure" on either dimension). When you're not sure whether a link is a single posting versus a small listing, KEEP it as "unsure" rather than discarding — it's better to surface a borderline result than hide it. Never hide an "unsure".
+- DISCARD a result (omit it from output) when it is clearly NOT a single job posting — a search-results page, a category/listing page that lists MANY roles (e.g. a recruiter's "/jobs/product-management" browse page, "all product jobs"), a blog/advice/job-description article, a course, or a recruiter's generic profile — OR it is a clear non-match on seniority or location — OR it is clearly older than about a month (see RECENCY).
+- KEEP a result when it is a plausible SINGLE posting that matches ("yes"), or when you genuinely can't tell whether it matches ("unsure" on either dimension). When you're not sure whether a link is a single posting versus a small listing, KEEP it as "unsure" rather than discarding — it's better to surface a borderline result than hide it. Never hide an "unsure".
 
 ## Extraction rules
 - Pull "company", "location" and "work_arrangement" from the title/snippet only. Do NOT invent them. Use "" for unknown text fields and "unknown" for work_arrangement when not evidenced.
@@ -227,8 +231,9 @@ Judge every result against the parameters and return your verdict.
       "location_match": "yes" | "no" | "unsure",
       "fit_score": number,   // integer 1–10, overall fit
       "fit_note": string,    // one line on what drives the score
+      "posted": string,      // date/age if evident in the snippet, else ""
       "reason": string
     }
   ]
 }
-Include only KEPT results (matches and unsures). Omit discarded ones. If nothing survives, return { "results": [] }.`;
+Include only KEPT results (matches and unsures that are current). Omit discarded ones (non-postings, clear non-matches, and anything clearly older than ~1 month). If nothing survives, return { "results": [] }.`;

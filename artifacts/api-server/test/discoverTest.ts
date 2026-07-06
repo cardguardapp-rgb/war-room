@@ -76,6 +76,8 @@ async function main() {
     "https://au.indeed.com/jobs?q=head+of+product&l=Brisbane", // ?q= search
     "https://example.com/careers/search?keywords=product", // /search + ?keywords=
     "https://jobs.example.com/browse/product", // /browse
+    "https://www.michaelpage.com.au/advice/job-description/technology/product-owner", // advice article
+    "https://www.talentinternational.com/skills/product-management", // skills category
   ];
   for (const u of shouldDrop) assert.ok(isSearchOrIndexPage(u), `should drop non-posting: ${u}`);
   const shouldKeep = [

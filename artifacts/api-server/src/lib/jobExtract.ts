@@ -14,6 +14,10 @@ export interface ExtractedJob {
   summary: string;
   /** Reasons the candidate might not want to continue — [] if a clean fit. */
   flags: string[];
+  /** Overall fit for the candidate, 1–10 — so they can decide whether to apply. */
+  fit_score: number;
+  /** One line on what drives the fit score. */
+  fit_note: string;
   posting_text: string;
 }
 
@@ -139,6 +143,8 @@ async function extractMeta(
   work_arrangement: WorkArrangement;
   summary: string;
   flags: string[];
+  fit_score: number;
+  fit_note: string;
 }> {
   const p = await createJson<Partial<ExtractedJob>>({
     model: EXTRACT_MODEL,
@@ -150,6 +156,11 @@ async function extractMeta(
   const flags = Array.isArray(p.flags)
     ? p.flags.map((f) => String(f ?? "").trim()).filter((f) => f.length > 0)
     : [];
+  const scoreRaw =
+    typeof p.fit_score === "number" ? p.fit_score : Number(p.fit_score);
+  const fit_score = Number.isFinite(scoreRaw)
+    ? Math.min(10, Math.max(1, Math.round(scoreRaw)))
+    : 5;
   return {
     title: (p.title ?? "").trim(),
     company: (p.company ?? "").trim(),
@@ -158,6 +169,8 @@ async function extractMeta(
       wa === "office" || wa === "hybrid" || wa === "remote" ? wa : "unknown",
     summary: (p.summary ?? "").trim(),
     flags,
+    fit_score,
+    fit_note: (p.fit_note ?? "").trim(),
   };
 }
 

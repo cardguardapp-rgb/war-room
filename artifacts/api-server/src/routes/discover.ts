@@ -79,7 +79,7 @@ router.post("/discover/search", async (req, res): Promise<void> => {
         screened: run.screenedCount,
         kept: run.results.length,
       },
-      note: "Results now target direct postings on company career sites, applicant-tracking systems and recruiter sites — job-board search/category pages are filtered out. Coverage is still indicative: web search and AI screening won't surface every role, and some may still be off. Always open the posting to confirm.",
+      note: "Results target recent direct postings on company career sites, ATS platforms and recruiter sites — big job boards (Seek, Indeed, LinkedIn, jobsora, etc.) and their search/category pages are excluded, and search is biased to the last month. Posting dates aren't always published, so some may still be older than a month — always open the posting to confirm the date and details.",
     });
   } catch (err) {
     const mapped = discoverErrorResponse(err);

@@ -259,19 +259,32 @@ checks, and the JSON contract) live in `src/lib/prompts.ts`** — `TAILOR_SYSTEM
   page, extracts the main content with `@mozilla/readability` + `jsdom` (that
   cleaned text becomes `posting_text`), then Sonnet 4.6 classifies
   title/company/location/work_arrangement AND returns a plain-English `summary`
-  (2–3 sentences on what the role is) and `flags[]` — an honest "should I even
+  (2–3 sentences on what the role is), `flags[]` — an honest "should I even
   bother?" list of reasons not to continue (seniority/location/arrangement
-  mismatch, fixed-term/relocation/excluded roles, other watch-outs); `[]` when
-  it's a clean fit (`jobExtract.ts`). The extract route loads the user's saved
-  **Discover criteria** (`discover_settings`, via `normaliseSettings`) and passes
-  them in as `JobCriteria` so flags are judged against the user's real
-  seniority/location/exclusion rules — criteria are best-effort and never block
-  extraction. If the fetch is blocked/junk (LinkedIn etc.) it returns
+  mismatch, fixed-term/relocation/excluded roles, other watch-outs; `[]` when
+  a clean fit) — AND a **`fit_score` (1–10) + one-line `fit_note`** (parity with
+  Discover; coerced/clamped in `jobExtract.ts`). The extract route loads the
+  user's saved **Discover criteria** (`discover_settings`, via `normaliseSettings`)
+  and passes them in as `JobCriteria` so the score/flags are judged against the
+  user's real seniority/location/exclusion rules — criteria are best-effort and
+  never block extraction. If the fetch is blocked/junk (LinkedIn etc.) it returns
   `{ fetch_failed: true, message }` and the UI offers a paste box. It does
-  **not** save — the review step (`AddJobDialog`) shows the summary panel + an
-  amber "Worth checking before you apply" flags panel above the editable fields,
-  then `POST /jobs` saves with status `New`. (`summary`/`flags` are advisory —
-  shown in the dialog, not stored on the job.)
+  **not** save the job — the review step (`AddJobDialog`) shows a colour-coded
+  fit chip + the summary panel + an amber "Worth checking before you apply" flags
+  panel above the editable fields.
+- **Fit assessment PERSISTS on the job** (fixing "scoring shows in Discover but
+  not on manually-added roles"): `POST /jobs` accepts an optional `assessment`
+  `{ fit_score, fit_note, summary, flags }` and stores it as a **`documents` row
+  of `type: "assessment"`** (jsonb `content_json`; NO jobs-table migration — the
+  documents `type` column is free text). `AddJobDialog` sends it on save.
+  **Job Detail** renders a "Fit assessment" card (score chip + note + summary +
+  flags) from that document and filters it out of the file-download list
+  (`docTypeLabels` gained an `assessment` label). For jobs added BEFORE this (or
+  any job lacking an assessment), Job Detail shows an **"Assess fit"** button →
+  `POST /jobs/:id/assess` re-runs `extractFromText` on the stored `postingText`
+  with the user's criteria, replaces any prior assessment doc, and returns it
+  (hook `useAssessJob`, `api.jobs.assess`); the existing card has a **"Re-assess"**
+  button too. `normaliseAssessment` in `routes/jobs.ts` validates the payload.
 
 ### Tailoring flow (`tailor.ts` — never invents; asks instead)
 1. `POST /jobs/:id/tailor` — initial pass. Sends posting + `resume_json` +
@@ -352,36 +365,41 @@ parameters, with one-tap handoff into the tailoring pipeline.
   Australia), `exclusions[]` (junior/mid PM, <6-month contracts, relocation),
   `extraKeywords`. `GET/PUT /discover/settings`. `normaliseSettings` validates
   and fills defaults on both read and write.
-- **Search** (`POST /discover/search`): biases toward **direct postings** on
+- **Search** (`POST /discover/search`): targets **recent direct postings** on
   hiring companies' career sites, ATS platforms (Greenhouse/Lever/Workday/etc.)
-  and AU recruiter sites — via query WORDING, not hard domain filters. (An
-  earlier version hard-restricted each query with `include_domains`/
-  `exclude_domains`; that starved results to ~zero, so it was reverted — the
-  posting filter + classifier now do the direct-link enforcement instead.)
-  `buildQueryPlan` (in `discover.ts`) returns a `TavilyQuerySpec[]`: two broad
-  region/remote sweeps, a careers sweep seeded with an `ATS_HINT` OR-list
-  (greenhouse/lever/workday/…), a recruiter-worded sweep, and a few per-title
-  sweeps — ~7 queries, capped at 10, NO domain filters set (the spec plumbing
-  stays for future use). `buildQueries` = the query texts alone (for the smoke
-  test). `tavily.ts` `tavilySearchSpecs(specs, base)` runs them via the **Tavily
-  API** (`search_depth: advanced`, `max_results: 8`) with optional per-query
-  include/exclude domains, merging + de-duping by URL (`tavilySearchMany` is now
-  a thin wrapper over it). Raw hits are de-duped by host+title, then a
-  **CONSERVATIVE `isSearchOrIndexPage(url)` drops only clear search-results /
-  category pages** (query-param search signals like `?q=`/`?keywords=`,
-  `/search|/browse|/results` segments, or an
-  aggregator `…-jobs` slug with no id) and leaves careers landing / listing
-  roots for the classifier to judge, so results aren't starved —
-  `runDiscover` reports `droppedNonPostings`. Dismissed URLs are dropped, then
-  classified in batches of 8 by
+  and AU recruiter sites. `buildQueryPlan` (`discover.ts`) returns a
+  `TavilyQuerySpec[]`: two broad region/remote sweeps, a careers sweep seeded
+  with an `ATS_HINT` OR-list, a recruiter-worded sweep, and a few per-title
+  sweeps (~7 queries, cap 10), each carrying `excludeDomains: AGGREGATOR_DOMAINS`
+  — a **BLACKLIST** of the big job boards + social/noise (seek/indeed/linkedin/
+  glassdoor/jora/**jobsora**/dynamitejobs/builtin/startup.jobs/instagram/…).
+  IMPORTANT: this is an exclusion blacklist, NOT the old `include_domains`
+  whitelist (that whitelist starved results to ~zero; a live curl probe confirmed
+  a blacklist still returns plenty of company career-site postings — careers.\*,
+  amazon.jobs, google careers, etc.). `buildQueries` = the query texts alone (for
+  the smoke test). `tavily.ts` `tavilySearchSpecs(specs, base)` runs them via the
+  **Tavily API** (`search_depth: advanced`, `max_results: 8`, **`time_range:
+  "month"`** to bias to recent) with per-query include/exclude domains, merging +
+  de-duping by URL. **Recency caveat: Tavily general search returns NO
+  `published_date`** (only the news topic does), so posting-date filtering is
+  BEST-EFFORT — `time_range` biases at the source and the classifier discards
+  results whose snippet shows they're clearly >1 month old, but undated ones are
+  kept. Raw hits are de-duped by host+title, then a **CONSERVATIVE
+  `isSearchOrIndexPage(url)`** drops clear search/category pages (`?q=`/
+  `?keywords=`, `/search|/browse|/results|/advice|/job-description|/skills`
+  segments, `…-jobs` slug with no id) — ambiguous `/jobs/<slug>` roots are left
+  for the classifier. `runDiscover` reports `droppedNonPostings`. Dismissed URLs
+  dropped, then classified in batches of 8 by
   **`claude-sonnet-4-6`** (`DISCOVER_CLASSIFY_SYSTEM` in `prompts.ts`) which
   returns per-result `company`/`location`/`work_arrangement`, `seniority_match`
   and `location_match` (`yes`/`no`/`unsure`), a **`fit_score` (integer 1–10) +
   one-line `fit_note`** (overall fit, so the user can decide whether to bother —
-  coerced/clamped in `discover.ts`), and a one-line reason. Clear
-  non-matches are discarded (the classify prompt now also **requires a single
-  direct posting URL** and discards search/index/careers-landing pages as a
-  backstop); **`unsure` results are kept and flagged**, never hidden. A final
+  coerced/clamped in `discover.ts`), a **`posted`** date/age string (from the
+  snippet if evident, else "" — shown on the card with a Clock icon), and a
+  one-line reason. Clear non-matches are discarded (the classify prompt also
+  **requires a single direct posting URL**, discards search/index/category/advice
+  pages, and **discards anything clearly older than ~1 month** — undated ones
+  kept); **`unsure` results are kept and flagged**, never hidden. A final
   company+title de-dupe runs across batches. Response `counts` =
   `{ raw, dropped_non_postings, screened, kept }` plus an indicative-coverage
   `note`.

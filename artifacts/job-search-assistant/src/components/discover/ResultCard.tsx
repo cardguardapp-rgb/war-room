@@ -9,6 +9,7 @@ import {
   X,
   Loader2,
   CheckCircle2,
+  Clock,
 } from "lucide-react";
 import type { DiscoverResult, MatchVerdict, WorkArrangement } from "@/lib/api";
 
@@ -138,6 +139,12 @@ export function ResultCard({
       )}
 
       {result.reason && <p className="text-sm text-muted-foreground">{result.reason}</p>}
+
+      {result.posted && (
+        <p className="text-xs text-muted-foreground/80 flex items-center gap-1">
+          <Clock className="w-3.5 h-3.5" /> {result.posted}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 pt-1">
         <Button size="sm" className="rounded-lg" onClick={onTailor}>

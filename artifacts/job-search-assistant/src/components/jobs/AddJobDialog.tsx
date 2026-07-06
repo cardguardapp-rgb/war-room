@@ -31,6 +31,8 @@ interface Draft {
   source_url: string;
   summary: string;
   flags: string[];
+  fit_score: number;
+  fit_note: string;
 }
 
 const EMPTY: Draft = {
@@ -42,6 +44,8 @@ const EMPTY: Draft = {
   source_url: "",
   summary: "",
   flags: [],
+  fit_score: 0,
+  fit_note: "",
 };
 
 /** Optional pre-fill for the dialog (used by Discover's "Tailor for this role"). */
@@ -115,6 +119,8 @@ export function AddJobDialog({
     source_url?: string;
     summary?: string;
     flags?: string[];
+    fit_score?: number;
+    fit_note?: string;
   }) => {
     // Fall back to the seed (e.g. Discover metadata) where extraction is thin.
     setDraft({
@@ -126,6 +132,8 @@ export function AddJobDialog({
       source_url: data.source_url || seed?.url || "",
       summary: (data.summary ?? "").trim(),
       flags: Array.isArray(data.flags) ? data.flags.filter((f) => f && f.trim()) : [],
+      fit_score: typeof data.fit_score === "number" ? data.fit_score : 0,
+      fit_note: (data.fit_note ?? "").trim(),
     });
     setStep("review");
   };
@@ -172,6 +180,9 @@ export function AddJobDialog({
       toast.error("A job title is required");
       return;
     }
+    // Persist the fit assessment with the job so it shows on Job Detail later.
+    const hasAssessment =
+      draft.fit_score > 0 || !!draft.fit_note || !!draft.summary || draft.flags.length > 0;
     createJob.mutate(
       {
         title: draft.title.trim(),
@@ -180,6 +191,14 @@ export function AddJobDialog({
         work_arrangement: draft.work_arrangement,
         source_url: draft.source_url.trim() || undefined,
         posting_text: draft.posting_text.trim() || undefined,
+        assessment: hasAssessment
+          ? {
+              fit_score: draft.fit_score,
+              fit_note: draft.fit_note,
+              summary: draft.summary,
+              flags: draft.flags,
+            }
+          : undefined,
       },
       {
         onSuccess: (job) => {
@@ -291,6 +310,45 @@ export function AddJobDialog({
           </Tabs>
         ) : (
           <div className="p-6 pt-4 space-y-4 overflow-y-auto">
+            {draft.fit_score > 0 && (
+              <div
+                className={`flex items-center gap-3 rounded-xl border p-3.5 ${
+                  draft.fit_score >= 8
+                    ? "border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40"
+                    : draft.fit_score >= 5
+                      ? "border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40"
+                      : "border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40"
+                }`}
+              >
+                <div
+                  className={`flex flex-col items-center justify-center leading-none shrink-0 ${
+                    draft.fit_score >= 8
+                      ? "text-emerald-700 dark:text-emerald-300"
+                      : draft.fit_score >= 5
+                        ? "text-amber-700 dark:text-amber-300"
+                        : "text-rose-700 dark:text-rose-300"
+                  }`}
+                >
+                  <span className="text-2xl font-semibold">
+                    {draft.fit_score}
+                    <span className="text-sm font-normal opacity-70">/10</span>
+                  </span>
+                  <span className="mt-0.5 text-[10px] font-medium uppercase tracking-wide">Fit</span>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    {draft.fit_score >= 8
+                      ? "Strong fit"
+                      : draft.fit_score >= 5
+                        ? "Worth a look"
+                        : "Weak fit"}
+                  </div>
+                  {draft.fit_note && (
+                    <p className="text-sm text-muted-foreground">{draft.fit_note}</p>
+                  )}
+                </div>
+              </div>
+            )}
             {draft.summary && (
               <div className="rounded-xl border border-border bg-muted/40 p-3.5 space-y-1.5">
                 <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">

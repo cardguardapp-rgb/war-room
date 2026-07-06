@@ -50,6 +50,8 @@ export interface TavilySearchOptions {
   searchDepth?: "basic" | "advanced";
   includeDomains?: string[];
   excludeDomains?: string[];
+  /** Bias to recently-published/indexed pages: "day" | "week" | "month" | "year". */
+  timeRange?: "day" | "week" | "month" | "year";
 }
 
 /** Run a single Tavily search and return its results (empty on soft failure). */
@@ -79,6 +81,7 @@ export async function tavilySearch(
         max_results: opts.maxResults ?? 6,
         include_answer: false,
         include_raw_content: false,
+        ...(opts.timeRange ? { time_range: opts.timeRange } : {}),
         ...(opts.includeDomains?.length ? { include_domains: opts.includeDomains } : {}),
         ...(opts.excludeDomains?.length ? { exclude_domains: opts.excludeDomains } : {}),
       }),

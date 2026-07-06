@@ -20,6 +20,31 @@ function parseId(raw: unknown): number | null {
   return Number.isNaN(id) ? null : id;
 }
 
+interface JobAssessment {
+  fit_score: number;
+  fit_note: string;
+  summary: string;
+  flags: string[];
+}
+
+/** Validate the optional fit assessment sent with a new job; null if empty/absent. */
+function normaliseAssessment(raw: unknown): JobAssessment | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const scoreRaw = typeof o["fit_score"] === "number" ? o["fit_score"] : Number(o["fit_score"]);
+  const fit_score = Number.isFinite(scoreRaw)
+    ? Math.min(10, Math.max(1, Math.round(scoreRaw as number)))
+    : 0;
+  const fit_note = typeof o["fit_note"] === "string" ? o["fit_note"].trim() : "";
+  const summary = typeof o["summary"] === "string" ? o["summary"].trim() : "";
+  const flags = Array.isArray(o["flags"])
+    ? o["flags"].map((f) => String(f ?? "").trim()).filter((f) => f.length > 0)
+    : [];
+  // Nothing worth persisting.
+  if (!fit_score && !fit_note && !summary && flags.length === 0) return null;
+  return { fit_score, fit_note, summary, flags };
+}
+
 async function getJob(id: number): Promise<Job | undefined> {
   const [row] = await db.select().from(jobsTable).where(eq(jobsTable.id, id));
   return row;
@@ -38,7 +63,7 @@ router.get("/jobs", async (_req, res): Promise<void> => {
 });
 
 router.post("/jobs", async (req, res): Promise<void> => {
-  const { title, company, location, work_arrangement, source_url, posting_text } =
+  const { title, company, location, work_arrangement, source_url, posting_text, assessment } =
     req.body ?? {};
 
   if (typeof title !== "string" || title.trim().length === 0) {
@@ -64,7 +89,65 @@ router.post("/jobs", async (req, res): Promise<void> => {
     })
     .returning();
 
+  // Persist the fit assessment (from extraction) as an `assessment` document so
+  // it's visible later on the Job Detail page, not just on the add-review screen.
+  const normalisedAssessment = normaliseAssessment(assessment);
+  if (normalisedAssessment) {
+    await db.insert(documentsTable).values({
+      jobId: row.id,
+      type: "assessment",
+      contentJson: normalisedAssessment,
+    });
+  }
+
   res.status(201).json(serializeJob(row));
+});
+
+// Generate (or refresh) the fit assessment for an EXISTING job from its stored
+// posting text — so jobs added before this feature can get a score too.
+router.post("/jobs/:id/assess", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+  const job = await getJob(id);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  if (!job.postingText || job.postingText.trim().length === 0) {
+    res.status(400).json({ error: "This job has no posting text to assess. Add the posting first." });
+    return;
+  }
+  try {
+    const criteria = await loadCriteria();
+    const meta = await extractFromText(job.postingText, criteria);
+    const assessment = normaliseAssessment({
+      fit_score: meta.fit_score,
+      fit_note: meta.fit_note,
+      summary: meta.summary,
+      flags: meta.flags,
+    });
+    if (!assessment) {
+      res.status(502).json({ error: "Couldn't produce an assessment for this posting." });
+      return;
+    }
+    // Replace any prior assessment for this job.
+    await db
+      .delete(documentsTable)
+      .where(and(eq(documentsTable.jobId, id), eq(documentsTable.type, "assessment")));
+    const [doc] = await db
+      .insert(documentsTable)
+      .values({ jobId: id, type: "assessment", contentJson: assessment })
+      .returning();
+    req.log.info({ jobId: id }, "Fit assessment generated");
+    res.status(201).json(serializeDocument(doc));
+  } catch (err) {
+    const mapped = aiErrorResponse(err);
+    req.log.error({ err, jobId: id }, "Fit assessment failed");
+    res.status(mapped.status).json({ error: mapped.error });
+  }
 });
 
 router.get("/jobs/:id", async (req, res): Promise<void> => {

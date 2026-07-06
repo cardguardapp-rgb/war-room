@@ -33,6 +33,8 @@ export interface DiscoverResult {
   fit_score: number;
   /** One line on what drives the fit score. */
   fit_note: string;
+  /** Posting date/age if the snippet reveals it (e.g. "Posted 2 weeks ago"); "" if unknown. */
+  posted: string;
   reason: string;
 }
 
@@ -88,13 +90,28 @@ export function normaliseSettings(raw: unknown): DiscoverSettings {
 // include_domains restriction, which starved results.
 const ATS_HINT = `(greenhouse OR lever OR workday OR smartrecruiters OR workable OR ashby OR bamboohr OR recruitee OR careers)`;
 
+// Big job-board aggregators + social/noise domains. EXCLUDED from every query
+// (a blacklist — safe, doesn't starve results) so Discover surfaces company
+// career-site and recruiter postings instead of aggregator search pages
+// (jobsora/seek/indeed/etc.). Live-tested: excluding these still returns plenty.
+const AGGREGATOR_DOMAINS = [
+  "seek.com.au", "indeed.com", "au.indeed.com", "linkedin.com", "au.linkedin.com",
+  "glassdoor.com", "glassdoor.com.au", "jora.com", "au.jora.com", "adzuna.com.au",
+  "careerone.com.au", "gumtree.com.au", "ziprecruiter.com", "simplyhired.com",
+  "talent.com", "au.talent.com", "jobstreet.com", "whatjobs.com", "neuvoo.com",
+  "trovit.com.au", "workforceaustralia.gov.au", "jobsora.com", "au.jobsora.com",
+  "dynamitejobs.com", "builtin.com", "builtinnyc.com", "startup.jobs",
+  "jobactive.gov.au", "instagram.com", "facebook.com", "twitter.com", "x.com",
+  "youtube.com", "reddit.com", "tiktok.com",
+];
+
 /**
  * Build the query PLAN: a spread of Tavily queries that BIAS toward direct
  * postings on company career sites, ATS platforms and recruiter sites — via
- * query wording, not hard domain filters (those returned almost nothing). The
- * `isSearchOrIndexPage` filter + the classifier are what actually keep results
- * to direct postings, so these queries stay broad for coverage. Capped so a
- * search stays quick and affordable.
+ * query wording — with the big job-board aggregators EXCLUDED on every query
+ * (blacklist) so results aren't dominated by aggregator search pages. The
+ * `isSearchOrIndexPage` filter + the classifier keep results to direct
+ * postings. Capped so a search stays quick and affordable.
  */
 export function buildQueryPlan(settings: DiscoverSettings): TavilyQuerySpec[] {
   const extra = settings.extraKeywords ? ` ${settings.extraKeywords}` : "";
@@ -103,32 +120,25 @@ export function buildQueryPlan(settings: DiscoverSettings): TavilyQuerySpec[] {
     .map((t) => `"${t}"`)
     .join(" OR ");
 
-  const specs: TavilyQuerySpec[] = [];
+  const queries: string[] = [];
   if (orTitles) {
     // Broad baseline for coverage — office region and remote-Australia.
-    specs.push({ query: `(${orTitles}) jobs Brisbane OR "Gold Coast" Queensland${extra}` });
-    specs.push({ query: `(${orTitles}) remote Australia job${extra}` });
+    queries.push(`(${orTitles}) jobs Brisbane OR "Gold Coast" Queensland${extra}`);
+    queries.push(`(${orTitles}) remote Australia job${extra}`);
     // Careers-page biased (company career sites + ATS platforms).
-    specs.push({ query: `(${orTitles}) careers Australia ${ATS_HINT}${extra}` });
+    queries.push(`(${orTitles}) careers Australia ${ATS_HINT}${extra}`);
     // Recruiter / agency biased.
-    specs.push({
-      query: `(${orTitles}) Australia (recruitment OR recruiter OR "talent acquisition")${extra}`,
-    });
+    queries.push(`(${orTitles}) Australia (recruitment OR recruiter OR "talent acquisition")${extra}`);
   }
 
   // Per-title sweeps to fill the budget (region + remote each).
   for (const t of settings.roleTitles.slice(0, 3)) {
-    specs.push({ query: `"${t}" job Brisbane OR "Gold Coast" OR remote Australia${extra}` });
+    queries.push(`"${t}" job Brisbane OR "Gold Coast" OR remote Australia${extra}`);
   }
 
-  // De-dupe on query text, then cap the whole plan.
-  const seen = new Set<string>();
-  const deduped = specs.filter((s) => {
-    if (seen.has(s.query)) return false;
-    seen.add(s.query);
-    return true;
-  });
-  return deduped.slice(0, 10);
+  // De-dupe, cap, and attach the aggregator blacklist to every query.
+  const unique = [...new Set(queries)].slice(0, 10);
+  return unique.map((query) => ({ query, excludeDomains: AGGREGATOR_DOMAINS }));
 }
 
 /** The query texts alone (used by the non-AI smoke test). */
@@ -158,8 +168,12 @@ export function isSearchOrIndexPage(url: string): boolean {
   if (/[?&](q|query|keywords?|search|searchterm)=/.test(query)) {
     return true;
   }
-  // Explicit search / browse / results path segments.
-  if (/\/(search|browse|results?|job-search|jobs-search|find-jobs)(\/|$)/.test(path)) {
+  // Explicit search / browse / results / advice path segments (not a single role).
+  if (
+    /\/(search|browse|results?|job-search|jobs-search|find-jobs|advice|job-description|career-advice|skills)(\/|$)/.test(
+      path,
+    )
+  ) {
     return true;
   }
   // Aggregator "…-jobs" category slugs with no posting id (e.g. /head-of-product-jobs).
@@ -266,6 +280,7 @@ async function classifyBatch(
       location_match: coerceVerdict(o["location_match"]),
       fit_score: coerceScore(o["fit_score"]),
       fit_note: String(o["fit_note"] ?? "").trim(),
+      posted: String(o["posted"] ?? "").trim(),
       reason: String(o["reason"] ?? "").trim(),
     });
   }
@@ -308,8 +323,13 @@ export async function runDiscover(
   isDismissed: (url: string) => boolean,
 ): Promise<DiscoverRun> {
   const plan = buildQueryPlan(settings);
-  // Slightly higher per-query cap since the posting filter drops the noise.
-  const raw = await tavilySearchSpecs(plan, { maxResults: 8, searchDepth: "advanced" });
+  // Bias to the last month at the source, and a higher per-query cap since the
+  // posting filter + aggregator exclusion drop a lot of noise.
+  const raw = await tavilySearchSpecs(plan, {
+    maxResults: 8,
+    searchDepth: "advanced",
+    timeRange: "month",
+  });
 
   const deduped = dedupeRaw(raw);
   // Keep only URLs that look like a specific posting, not a search/index page.

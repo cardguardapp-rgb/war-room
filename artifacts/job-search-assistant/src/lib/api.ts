@@ -115,8 +115,18 @@ export interface ExtractResponse {
   work_arrangement?: WorkArrangement;
   summary?: string;
   flags?: string[];
+  fit_score?: number;
+  fit_note?: string;
   posting_text?: string;
   source_url?: string;
+}
+
+/** Persisted fit assessment for a job (shown on Job Detail). */
+export interface JobAssessment {
+  fit_score: number;
+  fit_note: string;
+  summary: string;
+  flags: string[];
 }
 
 export interface ClarifyingQuestion {
@@ -162,7 +172,7 @@ export interface AppQuestionsResult {
 export interface Document {
   id: number;
   job_id: number;
-  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note';
+  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' | 'assessment';
   content_json: any;
   docx_object_key: string | null;
   pdf_object_key: string | null;
@@ -191,6 +201,7 @@ export interface DiscoverResult {
   location_match: MatchVerdict;
   fit_score: number;
   fit_note: string;
+  posted: string;
   reason: string;
 }
 
@@ -333,11 +344,12 @@ export const api = {
     get: (id: number) => fetchApi<Job>(`/jobs/${id}`),
     extract: (data: { url?: string; posting_text?: string }) =>
       fetchApi<ExtractResponse>("/jobs/extract", { method: "POST", body: JSON.stringify(data) }),
-    create: (data: { title: string; company?: string; location?: string; work_arrangement?: WorkArrangement; source_url?: string; posting_text?: string }) =>
+    create: (data: { title: string; company?: string; location?: string; work_arrangement?: WorkArrangement; source_url?: string; posting_text?: string; assessment?: JobAssessment }) =>
       fetchApi<Job>("/jobs", { method: "POST", body: JSON.stringify(data) }),
     update: (id: number, data: Partial<Pick<Job, 'title' | 'company' | 'location' | 'work_arrangement' | 'source_url' | 'posting_text' | 'status'>>) =>
       fetchApi<Job>(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: number) => fetchApi<void>(`/jobs/${id}`, { method: "DELETE" }),
+    assess: (id: number) => fetchApi<Document>(`/jobs/${id}/assess`, { method: "POST" }),
     // Tailoring flow
     tailorStart: (id: number) => fetchApi<TailorResult>(`/jobs/${id}/tailor`, { method: "POST" }),
     recordQa: (id: number, data: { question: string; answer: string }) =>

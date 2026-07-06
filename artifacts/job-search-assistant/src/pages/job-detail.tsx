@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { useJob, useUpdateJob, useDeleteJob, useDocuments, useRegenerateDocument } from "@/hooks/use-api";
+import { useJob, useUpdateJob, useDeleteJob, useDocuments, useRegenerateDocument, useAssessJob } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -23,6 +23,8 @@ import {
   MoreVertical,
   MapPin,
   RefreshCw,
+  AlertTriangle,
+  Info,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
@@ -48,6 +50,7 @@ const docTypeLabels: Record<Document["type"], string> = {
   cover_letter: "Cover letter",
   cover_letter_plain: "Cover letter (plain)",
   cover_note: "Cover note",
+  assessment: "Fit assessment",
 };
 
 function contentText(doc: Document): string {
@@ -73,6 +76,13 @@ export default function JobDetail() {
   const updateJob = useUpdateJob();
   const deleteJob = useDeleteJob();
   const regenerateDocument = useRegenerateDocument(jobId);
+  const assessJob = useAssessJob(jobId);
+
+  const runAssess = () =>
+    assessJob.mutate(undefined, {
+      onError: (err) =>
+        toast.error("Couldn't assess this role", { description: (err as Error).message }),
+    });
 
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -80,6 +90,7 @@ export default function JobDetail() {
   const resumeDoc = documents?.find((d) => d.type === "resume");
   const coverDoc = documents?.find((d) => d.type === "cover_letter");
   const noteDoc = documents?.find((d) => d.type === "cover_note");
+  const assessmentDoc = documents?.find((d) => d.type === "assessment");
   const hasQuickActions = !!(resumeDoc || coverDoc || noteDoc);
 
   if (jobLoading) {
@@ -202,6 +213,108 @@ export default function JobDetail() {
         </div>
       </div>
 
+      {/* Fit assessment (captured when the job was added) */}
+      {assessmentDoc?.content_json && (() => {
+        const a = assessmentDoc.content_json as {
+          fit_score?: number;
+          fit_note?: string;
+          summary?: string;
+          flags?: string[];
+        };
+        const score = typeof a.fit_score === "number" ? a.fit_score : 0;
+        const tone =
+          score >= 8
+            ? "text-emerald-700 dark:text-emerald-300"
+            : score >= 5
+              ? "text-amber-700 dark:text-amber-300"
+              : "text-rose-700 dark:text-rose-300";
+        const ring =
+          score >= 8
+            ? "border-emerald-300 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/30"
+            : score >= 5
+              ? "border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30"
+              : "border-rose-300 dark:border-rose-800 bg-rose-50/60 dark:bg-rose-950/30";
+        const label = score >= 8 ? "Strong fit" : score >= 5 ? "Worth a look" : "Weak fit";
+        const flags = Array.isArray(a.flags) ? a.flags.filter((f) => f && f.trim()) : [];
+        return (
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-semibold text-lg">Fit assessment</h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="rounded-lg text-muted-foreground"
+                onClick={runAssess}
+                disabled={assessJob.isPending}
+                title="Re-assess this role from the posting text"
+              >
+                <RefreshCw className={`w-4 h-4 mr-1.5 ${assessJob.isPending ? "animate-spin" : ""}`} />
+                {assessJob.isPending ? "Assessing…" : "Re-assess"}
+              </Button>
+            </div>
+            {score > 0 && (
+              <div className={`flex items-center gap-3 rounded-xl border p-3.5 ${ring}`}>
+                <div className={`flex flex-col items-center justify-center leading-none shrink-0 ${tone}`}>
+                  <span className="text-2xl font-semibold">
+                    {score}
+                    <span className="text-sm font-normal opacity-70">/10</span>
+                  </span>
+                  <span className="mt-0.5 text-[10px] font-medium uppercase tracking-wide">Fit</span>
+                </div>
+                <div className="min-w-0">
+                  <div className={`text-sm font-medium ${tone}`}>{label}</div>
+                  {a.fit_note && <p className="text-sm text-muted-foreground">{a.fit_note}</p>}
+                </div>
+              </div>
+            )}
+            {a.summary && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Info className="w-3.5 h-3.5" /> What this role is
+                </div>
+                <p className="text-sm leading-relaxed">{a.summary}</p>
+              </div>
+            )}
+            {flags.length > 0 && (
+              <div className="rounded-xl border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 p-3.5 space-y-2">
+                <div className="flex items-center gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="w-4 h-4" /> Worth checking before you apply
+                </div>
+                <ul className="space-y-1.5">
+                  {flags.map((f, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-300">
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* No assessment yet — offer to generate one from the stored posting. */}
+      {!assessmentDoc && job.posting_text && (
+        <div className="rounded-2xl border border-dashed border-border bg-card p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="font-semibold text-base">Fit assessment</h3>
+            <p className="text-sm text-muted-foreground">
+              Get a /10 fit score, a plain-English summary, and any red flags for this role.
+            </p>
+          </div>
+          <Button onClick={runAssess} disabled={assessJob.isPending} className="rounded-lg shrink-0">
+            {assessJob.isPending ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> Assessing…
+              </>
+            ) : (
+              "Assess fit"
+            )}
+          </Button>
+        </div>
+      )}
+
       {/* AI flows */}
       <TailorFlow job={job} alreadyTailored={!!resumeDoc} />
       <CoverLetterFlow job={job} alreadySaved={!!coverDoc} />
@@ -229,7 +342,10 @@ export default function JobDetail() {
         <div>
           <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <h3 className="font-semibold text-lg mb-4">Documents</h3>
-            {!documents || documents.length === 0 ? (
+            {(() => {
+              // The assessment is shown in its own card, not as a file here.
+              const fileDocs = (documents ?? []).filter((d) => d.type !== "assessment");
+              return fileDocs.length === 0 ? (
               <div className="text-center py-8 border border-dashed border-border rounded-xl bg-muted/20">
                 <p className="text-sm text-muted-foreground">
                   Approved resumes and cover letters appear here.
@@ -237,7 +353,7 @@ export default function JobDetail() {
               </div>
             ) : (
               <div className="space-y-3">
-                {documents.map((doc) => {
+                {fileDocs.map((doc) => {
                   const downloadable = doc.type === "resume" || doc.type === "cover_letter";
                   const copyable = doc.type === "cover_letter_plain" || doc.type === "cover_note";
                   return (
@@ -287,7 +403,8 @@ export default function JobDetail() {
                   );
                 })}
               </div>
-            )}
+            );
+            })()}
           </div>
         </div>
       </div>

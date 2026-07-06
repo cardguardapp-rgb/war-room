@@ -200,6 +200,17 @@ export function useRegenerateDocument(jobId: number) {
   });
 }
 
+/** Generate/refresh the fit assessment for an existing job (from its posting). */
+export function useAssessJob(jobId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.jobs.assess(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.documents(jobId) });
+    },
+  });
+}
+
 // Cover letters
 export function useCoverLetterStart() {
   return useMutation({ mutationFn: (id: number) => api.jobs.coverLetterStart(id) });
