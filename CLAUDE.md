@@ -352,22 +352,26 @@ parameters, with one-tap handoff into the tailoring pipeline.
   Australia), `exclusions[]` (junior/mid PM, <6-month contracts, relocation),
   `extraKeywords`. `GET/PUT /discover/settings`. `normaliseSettings` validates
   and fills defaults on both read and write.
-- **Search** (`POST /discover/search`): targets **direct postings** on hiring
-  companies' own career sites, ATS platforms (Greenhouse/Lever/Workday/etc.) and
-  AU recruiter sites — NOT job-board search pages. `buildQueryPlan` (in
-  `discover.ts`) returns a `TavilyQuerySpec[]` where each query carries its own
-  domain filter: ATS-hosted sweeps (`include_domains: ATS_DOMAINS`), company
-  careers sweeps and per-title sweeps (`exclude_domains: AGGREGATOR_DOMAINS` —
-  seek/indeed/linkedin/glassdoor/jora/etc.), and a recruiter sweep
-  (`include_domains: RECRUITER_DOMAINS`); ~9 queries, capped at 11.
-  `buildQueries` = the query texts alone (for the smoke test). `tavily.ts`
-  `tavilySearchSpecs(specs, base)` runs them via the **Tavily API**
-  (`search_depth: advanced`, `max_results: 8`) with per-query include/exclude
-  domains, merging + de-duping by URL (`tavilySearchMany` is now a thin wrapper
-  over it). Raw hits are de-duped by host+title, then **`isSearchOrIndexPage(url)`
-  drops search-results / category / careers-index pages** (query-param search
-  signals, `/search|/browse|/results`, a bare `…/jobs`/`…/careers` root, or an
-  aggregator `…-jobs` slug with no id) so only specific postings survive —
+- **Search** (`POST /discover/search`): biases toward **direct postings** on
+  hiring companies' career sites, ATS platforms (Greenhouse/Lever/Workday/etc.)
+  and AU recruiter sites — via query WORDING, not hard domain filters. (An
+  earlier version hard-restricted each query with `include_domains`/
+  `exclude_domains`; that starved results to ~zero, so it was reverted — the
+  posting filter + classifier now do the direct-link enforcement instead.)
+  `buildQueryPlan` (in `discover.ts`) returns a `TavilyQuerySpec[]`: two broad
+  region/remote sweeps, a careers sweep seeded with an `ATS_HINT` OR-list
+  (greenhouse/lever/workday/…), a recruiter-worded sweep, and a few per-title
+  sweeps — ~7 queries, capped at 10, NO domain filters set (the spec plumbing
+  stays for future use). `buildQueries` = the query texts alone (for the smoke
+  test). `tavily.ts` `tavilySearchSpecs(specs, base)` runs them via the **Tavily
+  API** (`search_depth: advanced`, `max_results: 8`) with optional per-query
+  include/exclude domains, merging + de-duping by URL (`tavilySearchMany` is now
+  a thin wrapper over it). Raw hits are de-duped by host+title, then a
+  **CONSERVATIVE `isSearchOrIndexPage(url)` drops only clear search-results /
+  category pages** (query-param search signals like `?q=`/`?keywords=`,
+  `/search|/browse|/results` segments, or an
+  aggregator `…-jobs` slug with no id) and leaves careers landing / listing
+  roots for the classifier to judge, so results aren't starved —
   `runDiscover` reports `droppedNonPostings`. Dismissed URLs are dropped, then
   classified in batches of 8 by
   **`claude-sonnet-4-6`** (`DISCOVER_CLASSIFY_SYSTEM` in `prompts.ts`) which

@@ -83,46 +83,18 @@ export function normaliseSettings(raw: unknown): DiscoverSettings {
   };
 }
 
-/**
- * Build a spread of Tavily queries from the settings: for each role title, an
- * office-region variant and a remote-Australia variant, plus a couple of
- * careers-page-targeted queries. Capped so a search stays quick and affordable.
- */
-// Big job-board aggregators whose results are mostly SEARCH / CATEGORY pages
-// (links to search terms, not a specific posting). Excluded from the broad web
-// queries so Discover surfaces the company career-site and recruiter postings
-// the user actually wants.
-const AGGREGATOR_DOMAINS = [
-  "seek.com.au", "indeed.com", "au.indeed.com", "linkedin.com",
-  "glassdoor.com", "glassdoor.com.au", "jora.com", "au.jora.com",
-  "adzuna.com.au", "careerone.com.au", "gumtree.com.au", "ziprecruiter.com",
-  "simplyhired.com", "talent.com", "au.talent.com", "jobstreet.com",
-  "whatjobs.com", "neuvoo.com", "trovit.com.au", "workforceaustralia.gov.au",
-];
-
-// Applicant-tracking / hosted-careers platforms — these URLs are almost always
-// a single direct posting. Targeted with include_domains.
-const ATS_DOMAINS = [
-  "greenhouse.io", "boards.greenhouse.io", "lever.co", "jobs.lever.co",
-  "workable.com", "smartrecruiters.com", "myworkdayjobs.com", "ashbyhq.com",
-  "jobs.ashbyhq.com", "teamtailor.com", "recruitee.com", "bamboohr.com",
-  "jobvite.com", "applytojob.com", "pinpointhq.com", "livehire.com",
-  "employmenthero.com", "jobadder.com", "expr3ss.com",
-];
-
-// Australian recruitment agencies that place senior / executive product roles.
-const RECRUITER_DOMAINS = [
-  "hays.com.au", "michaelpage.com.au", "roberthalf.com.au", "robertwalters.com.au",
-  "talentinternational.com", "peoplebank.com.au", "davidsonwp.com", "uandu.com",
-  "paxus.com.au", "launchrecruitment.com.au",
-];
+// ATS / hosted-careers platforms — postings here are almost always a single
+// direct role. Named in the query TEXT (a soft bias) rather than used as a hard
+// include_domains restriction, which starved results.
+const ATS_HINT = `(greenhouse OR lever OR workday OR smartrecruiters OR workable OR ashby OR bamboohr OR recruitee OR careers)`;
 
 /**
- * Build the query PLAN: a spread of Tavily queries, each with its own domain
- * filter, aimed at DIRECT postings on company career sites, ATS platforms and
- * recruiter sites (not job-board search pages). Groups: ATS-hosted careers,
- * company careers pages, recruiter/agency sites, and a few per-title sweeps —
- * all with the big aggregators excluded. Capped so a search stays quick.
+ * Build the query PLAN: a spread of Tavily queries that BIAS toward direct
+ * postings on company career sites, ATS platforms and recruiter sites — via
+ * query wording, not hard domain filters (those returned almost nothing). The
+ * `isSearchOrIndexPage` filter + the classifier are what actually keep results
+ * to direct postings, so these queries stay broad for coverage. Capped so a
+ * search stays quick and affordable.
  */
 export function buildQueryPlan(settings: DiscoverSettings): TavilyQuerySpec[] {
   const extra = settings.extraKeywords ? ` ${settings.extraKeywords}` : "";
@@ -133,48 +105,30 @@ export function buildQueryPlan(settings: DiscoverSettings): TavilyQuerySpec[] {
 
   const specs: TavilyQuerySpec[] = [];
   if (orTitles) {
-    // 1. ATS / hosted-careers platforms — direct posting URLs.
+    // Broad baseline for coverage — office region and remote-Australia.
+    specs.push({ query: `(${orTitles}) jobs Brisbane OR "Gold Coast" Queensland${extra}` });
+    specs.push({ query: `(${orTitles}) remote Australia job${extra}` });
+    // Careers-page biased (company career sites + ATS platforms).
+    specs.push({ query: `(${orTitles}) careers Australia ${ATS_HINT}${extra}` });
+    // Recruiter / agency biased.
     specs.push({
-      query: `(${orTitles}) Australia${extra}`,
-      includeDomains: ATS_DOMAINS,
-    });
-    specs.push({
-      query: `(${orTitles}) Brisbane OR "Gold Coast" OR remote Australia${extra}`,
-      includeDomains: ATS_DOMAINS,
-    });
-    // 2. Company career pages (aggregators excluded).
-    specs.push({
-      query: `(${orTitles}) careers Brisbane OR "Gold Coast" Queensland${extra}`,
-      excludeDomains: AGGREGATOR_DOMAINS,
-    });
-    specs.push({
-      query: `(${orTitles}) careers remote Australia${extra}`,
-      excludeDomains: AGGREGATOR_DOMAINS,
-    });
-    // 3. Recruitment-agency postings.
-    specs.push({
-      query: `(${orTitles}) recruitment agency Australia${extra}`,
-      includeDomains: RECRUITER_DOMAINS,
+      query: `(${orTitles}) Australia (recruitment OR recruiter OR "talent acquisition")${extra}`,
     });
   }
 
-  // 4. Per-title direct-posting sweeps (aggregators excluded) to fill the budget.
-  for (const t of settings.roleTitles.slice(0, 4)) {
-    specs.push({
-      query: `"${t}" job Brisbane OR "Gold Coast" OR remote Australia${extra}`,
-      excludeDomains: AGGREGATOR_DOMAINS,
-    });
+  // Per-title sweeps to fill the budget (region + remote each).
+  for (const t of settings.roleTitles.slice(0, 3)) {
+    specs.push({ query: `"${t}" job Brisbane OR "Gold Coast" OR remote Australia${extra}` });
   }
 
-  // De-dupe on query text + domain filter, then cap the whole plan.
+  // De-dupe on query text, then cap the whole plan.
   const seen = new Set<string>();
   const deduped = specs.filter((s) => {
-    const key = `${s.query}|${(s.includeDomains ?? []).join(",")}|${(s.excludeDomains ?? []).join(",")}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
+    if (seen.has(s.query)) return false;
+    seen.add(s.query);
     return true;
   });
-  return deduped.slice(0, 11);
+  return deduped.slice(0, 10);
 }
 
 /** The query texts alone (used by the non-AI smoke test). */
@@ -183,10 +137,12 @@ export function buildQueries(settings: DiscoverSettings): string[] {
 }
 
 /**
- * True when a URL is a search-results, category, or careers-index page rather
- * than a single job posting — the kind of link that points at search terms, not
- * a role. Conservative: only drops clear non-postings and leaves genuine
- * posting URLs for the classifier to judge.
+ * True when a URL is clearly a SEARCH-RESULTS or CATEGORY page rather than a
+ * single job posting — the kind of link that points at search terms, not a
+ * role. Deliberately CONSERVATIVE: it only drops the obvious offenders (search
+ * query strings, /search|/browse|/results paths, aggregator "…-jobs" category
+ * slugs) and leaves everything else — including company careers landing pages —
+ * for the classifier to judge, so we don't starve results.
  */
 export function isSearchOrIndexPage(url: string): boolean {
   let u: URL;
@@ -198,24 +154,12 @@ export function isSearchOrIndexPage(url: string): boolean {
   const path = u.pathname.toLowerCase().replace(/\/+$/, "");
   const query = u.search.toLowerCase();
 
-  // Search-style query parameters → a results page.
-  if (/[?&](q|query|keywords?|search|searchterm|term|page|start|offset)=/.test(query)) {
+  // Search-style query parameters → a results page (e.g. ?q=, ?keywords=).
+  if (/[?&](q|query|keywords?|search|searchterm)=/.test(query)) {
     return true;
   }
   // Explicit search / browse / results path segments.
-  if (
-    /\/(search|browse|results?|find|explore|listings?|job-search|jobs-search|search-results)(\/|$)/.test(
-      path,
-    )
-  ) {
-    return true;
-  }
-  // A jobs/careers hub root with nothing specific after it (an index page).
-  if (
-    /(^|\/)(jobs?|careers?|vacancies|opportunities|positions|roles|open-roles|current-vacancies|job-search|search-jobs|all-jobs)$/.test(
-      path,
-    )
-  ) {
+  if (/\/(search|browse|results?|job-search|jobs-search|find-jobs)(\/|$)/.test(path)) {
     return true;
   }
   // Aggregator "…-jobs" category slugs with no posting id (e.g. /head-of-product-jobs).

@@ -69,14 +69,13 @@ async function main() {
   assert.ok(q.every((s) => s.includes("SaaS")), "extraKeywords not appended");
   console.log(`OK  buildQueries: ${q.length} queries, region+remote+careers+keywords`);
 
-  // 5. isSearchOrIndexPage: drop search/category/index pages, keep direct postings.
+  // 5. isSearchOrIndexPage: drop only CLEAR search/category pages; keep the rest
+  //    (conservative on purpose — the classifier does the finer judging).
   const shouldDrop = [
-    "https://www.seek.com.au/head-of-product-jobs",
-    "https://au.indeed.com/jobs?q=head+of+product&l=Brisbane",
-    "https://boards.greenhouse.io/acme/jobs", // listing index root
-    "https://example.com/careers",
-    "https://example.com/careers/search?keywords=product",
-    "https://jobs.example.com/browse/product",
+    "https://www.seek.com.au/head-of-product-jobs", // aggregator category slug
+    "https://au.indeed.com/jobs?q=head+of+product&l=Brisbane", // ?q= search
+    "https://example.com/careers/search?keywords=product", // /search + ?keywords=
+    "https://jobs.example.com/browse/product", // /browse
   ];
   for (const u of shouldDrop) assert.ok(isSearchOrIndexPage(u), `should drop non-posting: ${u}`);
   const shouldKeep = [
@@ -84,9 +83,11 @@ async function main() {
     "https://jobs.lever.co/acme/8f3a1b2c-1111-2222-3333-444455556666",
     "https://acme.com/careers/head-of-product-brisbane",
     "https://acme.wd3.myworkdayjobs.com/en-US/careers/job/Brisbane/Head-of-Product_R12345",
+    "https://example.com/careers", // careers landing — kept, let the classifier judge
+    "https://boards.greenhouse.io/acme/jobs", // ATS listing root — kept, classifier judges
   ];
   for (const u of shouldKeep) assert.ok(!isSearchOrIndexPage(u), `should keep posting: ${u}`);
-  console.log("OK  isSearchOrIndexPage: drops search/index pages, keeps direct postings");
+  console.log("OK  isSearchOrIndexPage: drops clear search/category pages, keeps the rest");
 
   console.log("\nALL DISCOVER NON-AI CHECKS PASSED");
   process.exit(0);
