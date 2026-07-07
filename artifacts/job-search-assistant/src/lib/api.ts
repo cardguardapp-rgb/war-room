@@ -104,6 +104,10 @@ export interface Job {
   posting_text: string | null;
   status: JobStatus;
   created_at: string;
+  /** Overall fit 1–10 from the saved assessment (list view only); null if none. */
+  fit_score?: number | null;
+  /** One-line note on what drives the fit score; null if none. */
+  fit_note?: string | null;
 }
 
 export interface ExtractResponse {
@@ -206,7 +210,7 @@ export interface AppQuestionsResult {
 export interface Document {
   id: number;
   job_id: number;
-  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' | 'assessment';
+  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' | 'assessment' | 'chat';
   content_json: any;
   docx_object_key: string | null;
   pdf_object_key: string | null;
@@ -386,6 +390,8 @@ export const api = {
     assess: (id: number) => fetchApi<Document>(`/jobs/${id}/assess`, { method: "POST" }),
     chat: (id: number, messages: ChatMessage[]) =>
       fetchApi<{ reply: string }>(`/jobs/${id}/chat`, { method: "POST", body: JSON.stringify({ messages }) }),
+    getChat: (id: number) => fetchApi<{ messages: ChatMessage[] }>(`/jobs/${id}/chat`),
+    clearChat: (id: number) => fetchApi<void>(`/jobs/${id}/chat`, { method: "DELETE" }),
     // Tailoring flow
     tailorStart: (id: number) => fetchApi<TailorResult>(`/jobs/${id}/tailor`, { method: "POST" }),
     recordQa: (id: number, data: { question: string; answer: string }) =>

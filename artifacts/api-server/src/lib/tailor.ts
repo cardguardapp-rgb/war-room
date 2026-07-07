@@ -38,6 +38,8 @@ export interface TailorInput {
   editRequest?: string;
   /** finalize/revise: the current proposed resume to refine. */
   currentResume?: ResumeJson;
+  /** Optional grounding from the saved role-advice chat (see chatStore). */
+  coachingNotes?: string;
 }
 
 function buildUserContent(input: TailorInput): string {
@@ -53,6 +55,9 @@ function buildUserContent(input: TailorInput): string {
       input.extraAnswers ?? [],
     )}`,
   );
+  if (input.coachingNotes?.trim()) {
+    parts.push(`\n\n${input.coachingNotes.trim()}`);
+  }
 
   if (input.mode === "finalize") {
     if (input.answers?.length) {

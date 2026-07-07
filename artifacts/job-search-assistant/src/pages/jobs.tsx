@@ -11,6 +11,7 @@ import {
   Calendar,
   FileText,
   MapPin,
+  Target,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
@@ -30,6 +31,13 @@ const arrangementLabels: Record<string, string> = {
   hybrid: "Hybrid",
   remote: "Remote",
 };
+
+/** Colour the fit pill by score: strong (green) / decent (amber) / weak (rose). */
+function fitPillClass(score: number): string {
+  if (score >= 8) return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300";
+  if (score >= 6) return "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300";
+  return "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300";
+}
 
 export default function Jobs() {
   const { data: jobs, isLoading } = useJobs();
@@ -139,13 +147,21 @@ export default function Jobs() {
                     </div>
                   </div>
 
-                  <div className="shrink-0">
+                  <div className="shrink-0 flex flex-row-reverse sm:flex-col items-end gap-2">
                     <Badge
                       variant="secondary"
                       className={`${statusColors[job.status]} border-0 font-medium px-3 py-1 text-xs rounded-full`}
                     >
                       {job.status}
                     </Badge>
+                    {typeof job.fit_score === "number" && job.fit_score > 0 && (
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${fitPillClass(job.fit_score)}`}
+                        title={job.fit_note ?? undefined}
+                      >
+                        <Target className="w-3.5 h-3.5" /> Fit {job.fit_score}/10
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

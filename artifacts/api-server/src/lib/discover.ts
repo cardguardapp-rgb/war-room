@@ -90,20 +90,32 @@ export function normaliseSettings(raw: unknown): DiscoverSettings {
 // include_domains restriction, which starved results.
 const ATS_HINT = `(greenhouse OR lever OR workday OR smartrecruiters OR workable OR ashby OR bamboohr OR recruitee OR careers)`;
 
-// Big job-board aggregators + social/noise domains. EXCLUDED from every query
-// (a blacklist — safe, doesn't starve results) so Discover surfaces company
-// career-site and recruiter postings instead of aggregator search pages
-// (jobsora/seek/indeed/etc.). Live-tested: excluding these still returns plenty.
-const AGGREGATOR_DOMAINS = [
-  "seek.com.au", "indeed.com", "au.indeed.com", "linkedin.com", "au.linkedin.com",
+// Big job-board aggregators. Blacklisted on the general lanes (safe — live-tested
+// to still return plenty) so Discover surfaces company career-site and recruiter
+// postings instead of aggregator search pages (jobsora/seek/indeed/etc.).
+const JOB_BOARDS = [
+  "seek.com.au", "au.seek.com", "indeed.com", "au.indeed.com",
   "glassdoor.com", "glassdoor.com.au", "jora.com", "au.jora.com", "adzuna.com.au",
   "careerone.com.au", "gumtree.com.au", "ziprecruiter.com", "simplyhired.com",
-  "talent.com", "au.talent.com", "jobstreet.com", "whatjobs.com", "neuvoo.com",
-  "trovit.com.au", "workforceaustralia.gov.au", "jobsora.com", "au.jobsora.com",
-  "dynamitejobs.com", "builtin.com", "builtinnyc.com", "startup.jobs",
-  "jobactive.gov.au", "instagram.com", "facebook.com", "twitter.com", "x.com",
+  "talent.com", "au.talent.com", "jobstreet.com", "ph.jobstreet.com", "whatjobs.com",
+  "neuvoo.com", "trovit.com.au", "workforceaustralia.gov.au", "jobsora.com",
+  "au.jobsora.com", "dynamitejobs.com", "builtin.com", "builtinnyc.com",
+  "builtinboston.com", "builtinchicago.org", "startup.jobs", "jobactive.gov.au",
+  "jobgether.com", "jobeka.com", "au.jobeka.com", "migratemate.co", "4dayweek.io",
+];
+// Social/noise domains. Excluded on the general/company lanes, but LinkedIn is a
+// SEPARATE case (see below) — the user wants LinkedIn postings AND hiring posts,
+// so LinkedIn gets its own lane and is allowed on the recruiter lane.
+const SOCIAL = [
+  "instagram.com", "facebook.com", "twitter.com", "x.com",
   "youtube.com", "reddit.com", "tiktok.com",
 ];
+const LINKEDIN = ["linkedin.com", "au.linkedin.com"];
+// General/company lanes: keep it to company career sites + recruiter sites.
+const GENERAL_EXCLUDE = [...JOB_BOARDS, ...SOCIAL, ...LINKEDIN];
+// Recruiter / hiring-shout-out lane: exclude the big boards, but ALLOW LinkedIn
+// (and other socials) so recruiter posts and "we're hiring" shout-outs surface.
+const HIRING_EXCLUDE = [...JOB_BOARDS];
 
 /**
  * Build the query PLAN: a spread of Tavily queries that BIAS toward direct
@@ -120,25 +132,45 @@ export function buildQueryPlan(settings: DiscoverSettings): TavilyQuerySpec[] {
     .map((t) => `"${t}"`)
     .join(" OR ");
 
-  const queries: string[] = [];
+  const specs: TavilyQuerySpec[] = [];
   if (orTitles) {
-    // Broad baseline for coverage — office region and remote-Australia.
-    queries.push(`(${orTitles}) jobs Brisbane OR "Gold Coast" Queensland${extra}`);
-    queries.push(`(${orTitles}) remote Australia job${extra}`);
-    // Careers-page biased (company career sites + ATS platforms).
-    queries.push(`(${orTitles}) careers Australia ${ATS_HINT}${extra}`);
-    // Recruiter / agency biased.
-    queries.push(`(${orTitles}) Australia (recruitment OR recruiter OR "talent acquisition")${extra}`);
+    // Company career sites + recruiter sites (LinkedIn + big boards excluded).
+    const general = (query: string) => specs.push({ query, excludeDomains: GENERAL_EXCLUDE });
+    general(`(${orTitles}) jobs Brisbane OR "Gold Coast" Queensland${extra}`);
+    general(`(${orTitles}) remote Australia job${extra}`);
+    general(`(${orTitles}) careers Australia ${ATS_HINT}${extra}`);
+    general(`(${orTitles}) Australia (recruitment OR recruiter OR "talent acquisition")${extra}`);
+
+    // Recruiter / agency "we're hiring" shout-outs — LinkedIn ALLOWED here.
+    specs.push({
+      query: `(${orTitles}) Australia (hiring OR "we're hiring" OR "we are hiring" OR "now hiring" OR "looking for a")${extra}`,
+      excludeDomains: HIRING_EXCLUDE,
+    });
+    // LinkedIn — both real postings (/jobs/view/…) and member posts where a
+    // recruiter/founder says they're hiring. Include-only so it's LinkedIn-focused.
+    specs.push({
+      query: `(${orTitles}) Australia (hiring OR "looking for" OR "join our team" OR "we're growing")${extra}`,
+      includeDomains: LINKEDIN,
+    });
   }
 
   // Per-title sweeps to fill the budget (region + remote each).
   for (const t of settings.roleTitles.slice(0, 3)) {
-    queries.push(`"${t}" job Brisbane OR "Gold Coast" OR remote Australia${extra}`);
+    specs.push({
+      query: `"${t}" job Brisbane OR "Gold Coast" OR remote Australia${extra}`,
+      excludeDomains: GENERAL_EXCLUDE,
+    });
   }
 
-  // De-dupe, cap, and attach the aggregator blacklist to every query.
-  const unique = [...new Set(queries)].slice(0, 10);
-  return unique.map((query) => ({ query, excludeDomains: AGGREGATOR_DOMAINS }));
+  // De-dupe by query text and cap so a search stays quick and affordable.
+  const seen = new Set<string>();
+  const out: TavilyQuerySpec[] = [];
+  for (const s of specs) {
+    if (seen.has(s.query)) continue;
+    seen.add(s.query);
+    out.push(s);
+  }
+  return out.slice(0, 10);
 }
 
 /** The query texts alone (used by the non-AI smoke test). */
@@ -163,6 +195,14 @@ export function isSearchOrIndexPage(url: string): boolean {
   }
   const path = u.pathname.toLowerCase().replace(/\/+$/, "");
   const query = u.search.toLowerCase();
+  const host = u.host.toLowerCase().replace(/^www\./, "");
+
+  // LinkedIn: keep real postings (/jobs/view/…) and member posts (/posts/,
+  // /feed/) but drop personal profiles, company pages and school pages — they're
+  // leads at best, not postings, and add noise.
+  if (/(^|\.)linkedin\.com$/.test(host) && /^\/(in|pub|company|school)(\/|$)/.test(path)) {
+    return true;
+  }
 
   // Search-style query parameters → a results page (e.g. ?q=, ?keywords=).
   if (/[?&](q|query|keywords?|search|searchterm)=/.test(query)) {

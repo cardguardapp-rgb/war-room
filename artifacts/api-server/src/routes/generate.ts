@@ -7,6 +7,7 @@ import { aiErrorResponse, chatComplete, type ChatMessage } from "../lib/anthropi
 import { CHAT_MODEL, CHAT_SYSTEM } from "../lib/prompts";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
+import { clearChat, formatCoachingNotes, loadChat, saveChat } from "../lib/chatStore";
 import type { ResumeJson } from "../lib/resumeParser";
 import type { QaPair } from "../lib/tailor";
 
@@ -22,7 +23,12 @@ function parseId(raw: unknown): number | null {
 async function loadGenContext(
   id: number,
   res: Response,
-): Promise<{ job: Job; resumeJson: ResumeJson; extraAnswers: unknown } | null> {
+): Promise<{
+  job: Job;
+  resumeJson: ResumeJson;
+  extraAnswers: unknown;
+  coachingNotes: string;
+} | null> {
   const [job] = await db.select().from(jobsTable).where(eq(jobsTable.id, id));
   if (!job) {
     res.status(404).json({ error: "Job not found" });
@@ -34,17 +40,16 @@ async function loadGenContext(
   }
   const [profile] = await db.select().from(profileTable).where(eq(profileTable.id, 1));
 
-  // Prefer the latest approved tailored resume for this job.
+  // Prefer the latest approved tailored resume for this job. Query the newest
+  // 'resume' doc specifically so other document types (cover letters, the saved
+  // chat, the assessment) never shadow it.
   const [latestResumeDoc] = await db
     .select()
     .from(documentsTable)
-    .where(eq(documentsTable.jobId, id))
+    .where(and(eq(documentsTable.jobId, id), eq(documentsTable.type, "resume")))
     .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id))
     .limit(1);
-  const tailored =
-    latestResumeDoc?.type === "resume"
-      ? (latestResumeDoc.contentJson as ResumeJson | null)
-      : null;
+  const tailored = (latestResumeDoc?.contentJson as ResumeJson | null) ?? null;
   const base = (profile?.resumeJson as ResumeJson | null) ?? null;
   const resumeJson = tailored && Array.isArray(tailored.sections) ? tailored : base;
 
@@ -55,7 +60,10 @@ async function loadGenContext(
     return null;
   }
   const extraAnswers = profile?.extraAnswersJson ?? [];
-  return { job, resumeJson, extraAnswers };
+  // Fold in the saved role-advice chat so tailoring/letters/answers can draw on
+  // context the candidate shared there.
+  const coachingNotes = formatCoachingNotes(await loadChat(id));
+  return { job, resumeJson, extraAnswers, coachingNotes };
 }
 
 function toQaPairs(value: unknown): QaPair[] {
@@ -118,18 +126,49 @@ router.post("/jobs/:id/chat", async (req, res): Promise<void> => {
   const ctx = await loadGenContext(id, res);
   if (!ctx) return;
   try {
-    const reply = await chatComplete({
-      model: CHAT_MODEL,
-      system: buildChatSystem(ctx.job, ctx.resumeJson, ctx.extraAnswers),
-      messages,
-      maxTokens: 2048,
-    });
-    res.json({ reply: reply.trim() });
+    const reply = (
+      await chatComplete({
+        model: CHAT_MODEL,
+        system: buildChatSystem(ctx.job, ctx.resumeJson, ctx.extraAnswers),
+        messages,
+        maxTokens: 2048,
+      })
+    ).trim();
+    // Persist the full transcript (incl. this reply) so it survives reloads and
+    // can feed future resume/letter/answer generation for this role.
+    await saveChat(id, [...messages, { role: "assistant", content: reply }]);
+    res.json({ reply });
   } catch (err) {
     const mapped = aiErrorResponse(err);
     req.log.error({ err, jobId: id }, "Role chat failed");
     res.status(mapped.status).json({ error: mapped.error });
   }
+});
+
+// Load the saved advice-chat transcript for a job (empty array if none).
+router.get("/jobs/:id/chat", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+  const [job] = await db.select({ id: jobsTable.id }).from(jobsTable).where(eq(jobsTable.id, id));
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  res.json({ messages: await loadChat(id) });
+});
+
+// Clear the saved advice-chat transcript for a job ("New chat").
+router.delete("/jobs/:id/chat", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+  await clearChat(id);
+  res.sendStatus(204);
 });
 
 // --- Cover letters ------------------------------------------------------
@@ -148,6 +187,7 @@ router.post("/jobs/:id/cover-letters", async (req, res): Promise<void> => {
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
     });
     res.json(result);
   } catch (err) {
@@ -172,6 +212,7 @@ router.post("/jobs/:id/cover-letters/finalize", async (req, res): Promise<void> 
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
       answers: toQaPairs(answers),
       current: (current ?? undefined) as CoverLetterResult | undefined,
     });
@@ -202,6 +243,7 @@ router.post("/jobs/:id/cover-letters/revise", async (req, res): Promise<void> =>
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
       editRequest: edit_request.trim(),
       current: (current ?? undefined) as CoverLetterResult | undefined,
     });
@@ -295,6 +337,7 @@ router.post("/jobs/:id/questions", async (req, res): Promise<void> => {
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
       questions,
     });
     res.json(result);
@@ -324,6 +367,7 @@ router.post("/jobs/:id/questions/finalize", async (req, res): Promise<void> => {
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
       questions,
       answers: toQaPairs(answers),
     });

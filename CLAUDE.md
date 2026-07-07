@@ -93,9 +93,14 @@ artifacts/job-search-assistant/
   `company`, `source_url`, `posting_text`, `status`
   (`New` → `Tailoring` → `Ready` → `Applied`), `created_at`.
 - **`documents`** — generated artefacts tied to a job (`job_id`, cascade
-  delete). `type` is one of `resume`, `cover_letter`, `cover_letter_plain`,
-  `cover_note`. Holds `content_json` plus paths to generated `.docx`/`.pdf`
-  files under `uploads/`.
+  delete). `type` is free text; current values: `resume`, `cover_letter`,
+  `cover_letter_plain`, `cover_note`, `assessment` (the fit score/summary/flags,
+  one per job — see below), and `chat` (the saved role-advice transcript,
+  `content_json = { messages }`, one per job). Holds `content_json` plus paths
+  to generated `.docx`/`.pdf` files under `uploads/`. New "types" piggyback on
+  this table (free-text `type` + jsonb `content_json`) to avoid schema
+  migrations. `GET /jobs` joins in each job's `assessment` and returns
+  `fit_score`/`fit_note` on the list rows so the Jobs page can show a fit pill.
 - **`qa_log`** — a history of application-question/answer pairs tied to a
   job, for reuse and consistency across applications.
 - **`discover_settings`** — single row, `id = 1`. Holds the user's editable
@@ -215,10 +220,7 @@ test: `pnpm --filter @workspace/api-server exec tsx test/parseFixture.ts`.
   now" button plus an editable parameters panel (role levels, office-region
   rule, remote rule, exclusions, extra keywords). Each result is a mobile-first
   card: title, company, location/arrangement + seniority/location-match badges,
-  a **fit score out of 10** (colour-coded chip top-right + a "Strong fit / Worth
-  a look / Weak fit" line with a one-line `fit_note`) so the user can decide
-  whether to apply at all, a one-line reason, "Open listing" (new tab), "Tailor
-  for this role" (seeds the
+  a one-line reason, "Open listing" (new tab), "Tailor for this role" (seeds the
   Add-a-job dialog → posting fetch with paste fallback → Job Detail), "Save"
   (adds to Jobs as `New`), and "Dismiss" (URL never shown again). A standing note
   says results are indicative. UI: `src/pages/discover.tsx` +
@@ -258,33 +260,10 @@ checks, and the JSON contract) live in `src/lib/prompts.ts`** — `TAILOR_SYSTEM
 - `POST /jobs/extract` `{ url }` or `{ posting_text }`. For a URL: fetches the
   page, extracts the main content with `@mozilla/readability` + `jsdom` (that
   cleaned text becomes `posting_text`), then Sonnet 4.6 classifies
-  title/company/location/work_arrangement AND returns a plain-English `summary`
-  (2–3 sentences on what the role is), `flags[]` — an honest "should I even
-  bother?" list of reasons not to continue (seniority/location/arrangement
-  mismatch, fixed-term/relocation/excluded roles, other watch-outs; `[]` when
-  a clean fit) — AND a **`fit_score` (1–10) + one-line `fit_note`** (parity with
-  Discover; coerced/clamped in `jobExtract.ts`). The extract route loads the
-  user's saved **Discover criteria** (`discover_settings`, via `normaliseSettings`)
-  and passes them in as `JobCriteria` so the score/flags are judged against the
-  user's real seniority/location/exclusion rules — criteria are best-effort and
-  never block extraction. If the fetch is blocked/junk (LinkedIn etc.) it returns
-  `{ fetch_failed: true, message }` and the UI offers a paste box. It does
-  **not** save the job — the review step (`AddJobDialog`) shows a colour-coded
-  fit chip + the summary panel + an amber "Worth checking before you apply" flags
-  panel above the editable fields.
-- **Fit assessment PERSISTS on the job** (fixing "scoring shows in Discover but
-  not on manually-added roles"): `POST /jobs` accepts an optional `assessment`
-  `{ fit_score, fit_note, summary, flags }` and stores it as a **`documents` row
-  of `type: "assessment"`** (jsonb `content_json`; NO jobs-table migration — the
-  documents `type` column is free text). `AddJobDialog` sends it on save.
-  **Job Detail** renders a "Fit assessment" card (score chip + note + summary +
-  flags) from that document and filters it out of the file-download list
-  (`docTypeLabels` gained an `assessment` label). For jobs added BEFORE this (or
-  any job lacking an assessment), Job Detail shows an **"Assess fit"** button →
-  `POST /jobs/:id/assess` re-runs `extractFromText` on the stored `postingText`
-  with the user's criteria, replaces any prior assessment doc, and returns it
-  (hook `useAssessJob`, `api.jobs.assess`); the existing card has a **"Re-assess"**
-  button too. `normaliseAssessment` in `routes/jobs.ts` validates the payload.
+  title/company/location/work_arrangement (`jobExtract.ts`). If the fetch is
+  blocked/junk (LinkedIn etc.) it returns `{ fetch_failed: true, message }` and
+  the UI offers a paste box. It does **not** save — the UI shows an editable
+  review, then `POST /jobs` saves with status `New`.
 
 ### Tailoring flow (`tailor.ts` — never invents; asks instead)
 1. `POST /jobs/:id/tailor` — initial pass. Sends posting + `resume_json` +
@@ -354,53 +333,23 @@ For cover letters / questions the resume passed to the model is the **latest
 approved tailored resume** for that job if one exists, else the base
 `resume_json`.
 
-## Role-advice chat
+## Role-advice chat (persisted + feeds generation)
 
-Conversational career-coach chat scoped to ONE job. `POST /jobs/:id/chat`
-`{ messages: [{role:"user"|"assistant", content}] }` → `{ reply }`. Uses the same
-senior-recruiter persona (`CHAT_SYSTEM` in `prompts.ts`, model `CHAT_MODEL` =
-Opus 4.8) via a new **non-streaming** `chatComplete()` helper in `anthropic.ts`
-(system prompt sent with `cache_control: ephemeral` since the grounding context
-is re-sent each turn). The route (in `generate.ts`) reuses `loadGenContext`
-(needs posting text + a confirmed base resume) and builds the system prompt =
-persona + a CONTEXT block (posting + `resume_json` + extra answers) so advice is
-grounded and never invents experience. Server bounds the history to the last 20
-turns and 4 000 chars/message. **Conversation is NOT persisted** — client-side
-state only (`RoleChat.tsx`), cleared on navigation. Frontend: `RoleChat`
-(bubble UI, starter-prompt chips, Enter-to-send, "Thinking…" indicator, retry on
-error) mounted at the top of the Job Detail AI flows; `api.jobs.chat` +
-`useJobChat` hook. AU English, honest-fit persona.
-
-## Personal website generator
-
-Generates a **downloadable static multi-page website** from `resume_json` + a
-small website-specific config. Design decision: **author here, host elsewhere**
-— do NOT serve the public site from this PIN-gated app (couples uptime/cost +
-security). `lib/siteBuild.ts` is PURE (no I/O): `buildSite(resume, config,
-"files"|"preview")` → a `{ path: contents }` map (index/about/experience/skills/
-education/contact `.html` + `styles.css` + `robots.txt` + `README.txt`); clean
-responsive HTML/CSS, SEO/OG meta, accent-colour CSS var, **no build step**.
-`WebsiteConfig` + `defaultWebsiteConfig`/`normaliseWebsiteConfig` (seed name/
-links/bio from the resume contact+summary). Config is stored in **object
-storage** at fixed key `website/config.json` (NO DB migration). Routes
-(`routes/website.ts`, mounted in `routes/index.ts`, behind `requirePin`):
-`GET/PUT /website` (config), `POST /website/draft` (AI headline/tagline/bio/about
-all at once — `createJson` + `WEBSITE_DRAFT_SYSTEM`/`WEBSITE_MODEL`=Opus 4.8;
-grounded, never-fabricate, AU English), `POST /website/write` `{field,current,
-instruction}` (**per-field** write/improve for headline|tagline|bio|about — plain
-text via `chatComplete` + `WEBSITE_FIELD_SYSTEM` + a per-field brief in
-`FIELD_SPECS`; the frontend `AiAssist` component renders an "Improve/Write with
-AI" control under each field with suggestion chips + a free-text instruction box,
-hook `useWriteWebsiteField`/`api.website.write`), `GET /website/preview?page=` (self-contained HTML
-for the in-app `<iframe>`/new tab; inlines CSS, links via `?page=`), `GET
-/website/export` (JSZip → `<slug>-website.zip`). Preview/export use the SAVED
-config (the frontend saves before previewing/downloading). Frontend: `pages/
-website.tsx` (route in `AppRouter`, new **"Website" nav tab** w/ Globe icon in
-`AppLayout` — now 4 tabs) — edit basics/bio, toggle which pages to include,
-contact + links editor, **AI-draft** button, Save, Save&preview, Download .zip,
-a **live preview iframe** (re-keys on save), and a deploy guide (Netlify Drop /
-Cloudflare Pages + custom-domain steps; a README.txt is in the zip). `api.website.*`
-+ `useWebsite`/`useSaveWebsite`/`useDraftWebsite`.
+`RoleChat` (Job Detail) talks to the senior-recruiter persona about one role.
+`POST /jobs/:id/chat` `{ messages }` → `{ reply }` (Opus 4.8, `chatComplete`,
+`CHAT_SYSTEM`, grounded in posting + resume + extra answers). The transcript is
+**persisted server-side** after each reply as a `documents` row (`type: 'chat'`,
+`content_json = { messages }`, one per job) via `src/lib/chatStore.ts`
+(`loadChat`/`saveChat`/`clearChat`). `GET /jobs/:id/chat` returns the saved
+messages (RoleChat seeds from it on mount); `DELETE /jobs/:id/chat` clears it
+("New chat"). The saved chat is folded into **future generation for that role**:
+`formatCoachingNotes()` renders it into a conservative "PRIOR COACHING
+CONVERSATION" grounding block (guidance, not fact; never invent), threaded as an
+optional `coachingNotes` field into `runTailor`/`runCoverLetters`/
+`runAppQuestions` (from `loadTailorContext` in jobs.ts and `loadGenContext` in
+generate.ts). `loadGenContext` selects the newest `type='resume'` doc
+specifically, so the `chat`/`assessment`/cover docs never shadow the tailored
+resume.
 
 ## Discover (web job search)
 
@@ -413,52 +362,35 @@ parameters, with one-tap handoff into the tailoring pipeline.
   Australia), `exclusions[]` (junior/mid PM, <6-month contracts, relocation),
   `extraKeywords`. `GET/PUT /discover/settings`. `normaliseSettings` validates
   and fills defaults on both read and write.
-- **Search** (`POST /discover/search`): targets **recent direct postings** on
-  hiring companies' career sites, ATS platforms (Greenhouse/Lever/Workday/etc.)
-  and AU recruiter sites. `buildQueryPlan` (`discover.ts`) returns a
-  `TavilyQuerySpec[]`: two broad region/remote sweeps, a careers sweep seeded
-  with an `ATS_HINT` OR-list, a recruiter-worded sweep, and a few per-title
-  sweeps (~7 queries, cap 10), each carrying `excludeDomains: AGGREGATOR_DOMAINS`
-  — a **BLACKLIST** of the big job boards + social/noise (seek/indeed/linkedin/
-  glassdoor/jora/**jobsora**/dynamitejobs/builtin/startup.jobs/instagram/…).
-  IMPORTANT: this is an exclusion blacklist, NOT the old `include_domains`
-  whitelist (that whitelist starved results to ~zero; a live curl probe confirmed
-  a blacklist still returns plenty of company career-site postings — careers.\*,
-  amazon.jobs, google careers, etc.). `buildQueries` = the query texts alone (for
-  the smoke test). `tavily.ts` `tavilySearchSpecs(specs, base)` runs them via the
-  **Tavily API** (`search_depth: advanced`, `max_results: 8`, **`time_range:
-  "month"`** to bias to recent) with per-query include/exclude domains, merging +
-  de-duping by URL. **Recency caveat: Tavily general search returns NO
-  `published_date`** (only the news topic does), so posting-date filtering is
-  BEST-EFFORT — `time_range` biases at the source and the classifier discards
-  results whose snippet shows they're clearly >1 month old, but undated ones are
-  kept. Raw hits are de-duped by host+title, then a **CONSERVATIVE
-  `isSearchOrIndexPage(url)`** drops clear search/category pages (`?q=`/
-  `?keywords=`, `/search|/browse|/results|/advice|/job-description|/skills`
-  segments, `…-jobs` slug with no id) — ambiguous `/jobs/<slug>` roots are left
-  for the classifier. `runDiscover` reports `droppedNonPostings`. Dismissed URLs
-  dropped, then classified in batches of 8 by
+- **Search** (`POST /discover/search`): `buildQueryPlan` builds up to 10 lanes
+  (capped): general/company + careers/ATS + recruiter-agency lanes (big job
+  boards **and** LinkedIn excluded, so company/recruiter sites surface); a
+  **recruiter "we're hiring" shout-out lane** (boards excluded but **LinkedIn
+  allowed**); and a **LinkedIn lane** (`includeDomains` LinkedIn) that catches
+  real postings (`/jobs/view/…`) and member hiring posts. `isSearchOrIndexPage`
+  drops search/category pages and LinkedIn `/in`·`/company`·`/school` profile
+  pages, but keeps `/jobs/view/` and `/posts/`. The classifier is deliberately
+  lenient (default KEEP): it only discards clear non-postings/blogs/events and
+  CLEAR seniority/location breaches — ambiguous-location AU roles, recruiter
+  postings with no named employer, and LinkedIn hiring posts are kept as
+  `unsure`. Domain lists live in `discover.ts` (`JOB_BOARDS`, `SOCIAL`,
+  `LINKEDIN`, `GENERAL_EXCLUDE`, `HIRING_EXCLUDE`). `tavily.ts` runs them via the
+  **Tavily API**
+  (`search_depth: advanced`), merging + de-duping by URL. Dismissed URLs are
+  dropped, results de-duped by host+title, then classified in batches of 8 by
   **`claude-sonnet-4-6`** (`DISCOVER_CLASSIFY_SYSTEM` in `prompts.ts`) which
   returns per-result `company`/`location`/`work_arrangement`, `seniority_match`
-  and `location_match` (`yes`/`no`/`unsure`), a **`fit_score` (integer 1–10) +
-  one-line `fit_note`** (overall fit, so the user can decide whether to bother —
-  coerced/clamped in `discover.ts`), a **`posted`** date/age string (from the
-  snippet if evident, else "" — shown on the card with a Clock icon), and a
-  one-line reason. Clear non-matches are discarded (the classify prompt also
-  **requires a single direct posting URL**, discards search/index/category/advice
-  pages, and **discards anything clearly older than ~1 month** — undated ones
-  kept); **`unsure` results are kept and flagged**, never hidden. A final
-  company+title de-dupe runs across batches. Response `counts` =
-  `{ raw, dropped_non_postings, screened, kept }` plus an indicative-coverage
-  `note`.
+  and `location_match` (`yes`/`no`/`unsure`), and a one-line reason. Clear
+  non-matches are discarded; **`unsure` results are kept and flagged**, never
+  hidden. A final company+title de-dupe runs across batches. Response includes a
+  `counts` object and an indicative-coverage `note`.
 - **Actions** (frontend): "Tailor for this role" seeds `AddJobDialog`
   (`JobSeed`) which auto-runs the Phase-3 extraction (paste fallback on a blocked
   fetch) then navigates to the Job Detail tailoring flow. "Save" fetches the
   posting (falling back to metadata only) and creates a `New` job. "Dismiss"
   calls `POST /discover/dismiss` and hides the URL forever.
-- **De-dupe / filtering** happens at four points: Tavily URL merge,
-  pre-classification host+title, the `isSearchOrIndexPage` posting filter, and
-  post-classification company+title.
+- **De-dupe** happens at three points: Tavily URL merge, pre-classification
+  host+title, post-classification company+title.
 
 Non-AI smoke test (tables + `normaliseSettings` + `buildQueries`, no keys):
 `pnpm --filter @workspace/api-server exec tsx test/discoverTest.ts`.

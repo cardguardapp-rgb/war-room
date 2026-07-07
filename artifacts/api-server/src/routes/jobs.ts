@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
+import { inArray } from "drizzle-orm";
 import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, discoverSettingsTable, type Job, type Profile } from "../lib/db";
 import { serializeJob, serializeDocument } from "../lib/serialize";
 import { deleteObject } from "../lib/objectStore";
 import { aiErrorResponse } from "../lib/anthropic";
+import { loadChat, formatCoachingNotes } from "../lib/chatStore";
 import { extractFromText, extractFromUrl, type JobCriteria } from "../lib/jobExtract";
 import { normaliseSettings } from "../lib/discover";
 import { runTailor, type QaPair } from "../lib/tailor";
@@ -59,7 +61,35 @@ async function getProfileRow(): Promise<Profile | undefined> {
 
 router.get("/jobs", async (_req, res): Promise<void> => {
   const jobs = await db.select().from(jobsTable).orderBy(desc(jobsTable.createdAt), desc(jobsTable.id));
-  res.json(jobs.map(serializeJob));
+  const ids = jobs.map((j) => j.id);
+
+  // Attach each job's fit score (from its saved `assessment` document) so the
+  // Jobs list can show it at a glance. At most one assessment per job, but keep
+  // the newest if duplicates ever exist.
+  const assessments = ids.length
+    ? await db
+        .select()
+        .from(documentsTable)
+        .where(and(inArray(documentsTable.jobId, ids), eq(documentsTable.type, "assessment")))
+    : [];
+  const byJob = new Map<number, (typeof assessments)[number]>();
+  for (const d of assessments) {
+    const prev = byJob.get(d.jobId);
+    if (!prev || d.id > prev.id) byJob.set(d.jobId, d);
+  }
+
+  res.json(
+    jobs.map((j) => {
+      const a = byJob.get(j.id)?.contentJson as
+        | { fit_score?: number; fit_note?: string }
+        | undefined;
+      return {
+        ...serializeJob(j),
+        fit_score: typeof a?.fit_score === "number" ? a.fit_score : null,
+        fit_note: typeof a?.fit_note === "string" ? a.fit_note : null,
+      };
+    }),
+  );
 });
 
 router.post("/jobs", async (req, res): Promise<void> => {
@@ -284,7 +314,12 @@ router.post("/jobs/extract", async (req, res): Promise<void> => {
 async function loadTailorContext(
   id: number,
   res: Response,
-): Promise<{ job: Job; resumeJson: ResumeJson; extraAnswers: unknown } | null> {
+): Promise<{
+  job: Job;
+  resumeJson: ResumeJson;
+  extraAnswers: unknown;
+  coachingNotes: string;
+} | null> {
   const job = await getJob(id);
   if (!job) {
     res.status(404).json({ error: "Job not found" });
@@ -305,7 +340,10 @@ async function loadTailorContext(
     return null;
   }
   const extraAnswers = profile?.extraAnswersJson ?? [];
-  return { job, resumeJson, extraAnswers };
+  // Fold in the saved role-advice chat so tailoring can draw on what the
+  // candidate shared there (context only — never invented experience).
+  const coachingNotes = formatCoachingNotes(await loadChat(id));
+  return { job, resumeJson, extraAnswers, coachingNotes };
 }
 
 // Initial tailoring — may return clarifying questions. Sets status Tailoring.
@@ -324,6 +362,7 @@ router.post("/jobs/:id/tailor", async (req, res): Promise<void> => {
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
     });
     await db
       .update(jobsTable)
@@ -411,6 +450,7 @@ router.post("/jobs/:id/tailor/finalize", async (req, res): Promise<void> => {
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
       answers: answerPairs,
       currentResume:
         current_resume && Array.isArray(current_resume.sections)
@@ -451,6 +491,7 @@ router.post("/jobs/:id/tailor/revise", async (req, res): Promise<void> => {
       postingText: ctx.job.postingText!,
       resumeJson: ctx.resumeJson,
       extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
       editRequest: edit_request.trim(),
       currentResume: proposed_resume as ResumeJson,
     });

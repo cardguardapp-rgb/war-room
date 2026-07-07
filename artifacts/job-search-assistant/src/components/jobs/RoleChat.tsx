@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
-import { useProfile, useJobChat } from "@/hooks/use-api";
+import { useProfile, useJobChat, useJobChatHistory, useClearJobChat } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -23,11 +23,22 @@ const STARTERS = [
 export function RoleChat({ job }: { job: Job }) {
   const { data: profile } = useProfile();
   const chat = useJobChat(job.id);
+  const history = useJobChatHistory(job.id);
+  const clearChat = useClearJobChat(job.id);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const seeded = useRef(false);
+
+  // Seed from the saved transcript once, when it first loads.
+  useEffect(() => {
+    if (!seeded.current && history.data) {
+      setMessages(history.data.messages ?? []);
+      seeded.current = true;
+    }
+  }, [history.data]);
 
   const hasResume = !!profile?.resume_json?.sections?.length;
   const hasPosting = !!job.posting_text?.trim();
@@ -79,6 +90,7 @@ export function RoleChat({ job }: { job: Job }) {
             onClick={() => {
               setMessages([]);
               setError(null);
+              clearChat.mutate();
             }}
           >
             <RotateCcw className="w-4 h-4 mr-1.5" /> New chat
@@ -179,7 +191,10 @@ export function RoleChat({ job }: { job: Job }) {
           {chat.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground/70">This chat isn't saved — it clears when you leave the page.</p>
+      <p className="text-xs text-muted-foreground/70">
+        This chat is saved for this role — it stays here when you come back, and helps tailor your future
+        resumes, cover letters and application answers. Use “New chat” to clear it.
+      </p>
     </div>
   );
 }

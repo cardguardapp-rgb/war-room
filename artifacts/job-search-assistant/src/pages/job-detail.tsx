@@ -52,6 +52,7 @@ const docTypeLabels: Record<Document["type"], string> = {
   cover_letter_plain: "Cover letter (plain)",
   cover_note: "Cover note",
   assessment: "Fit assessment",
+  chat: "Advice chat",
 };
 
 function contentText(doc: Document): string {
@@ -345,8 +346,10 @@ export default function JobDetail() {
           <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <h3 className="font-semibold text-lg mb-4">Documents</h3>
             {(() => {
-              // The assessment is shown in its own card, not as a file here.
-              const fileDocs = (documents ?? []).filter((d) => d.type !== "assessment");
+              // The assessment (its own card) and the saved chat are not files.
+              const fileDocs = (documents ?? []).filter(
+                (d) => d.type !== "assessment" && d.type !== "chat",
+              );
               return fileDocs.length === 0 ? (
               <div className="text-center py-8 border border-dashed border-border rounded-xl bg-muted/20">
                 <p className="text-sm text-muted-foreground">

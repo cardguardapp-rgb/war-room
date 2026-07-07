@@ -22,6 +22,8 @@ export interface AppQuestionsInput {
   questions: string;
   /** finalize: answers to the clarifying questions the model asked. */
   answers?: QaPair[];
+  /** Optional grounding from the saved role-advice chat (see chatStore). */
+  coachingNotes?: string;
 }
 
 function buildUserContent(input: AppQuestionsInput): string {
@@ -31,6 +33,9 @@ function buildUserContent(input: AppQuestionsInput): string {
     `\n\nCANDIDATE RESUME (JSON) — factual ground truth:\n${JSON.stringify(input.resumeJson)}`,
   );
   parts.push(`\n\nEXTRA ANSWERS (JSON):\n${JSON.stringify(input.extraAnswers ?? [])}`);
+  if (input.coachingNotes?.trim()) {
+    parts.push(`\n\n${input.coachingNotes.trim()}`);
+  }
   parts.push(`\n\nAPPLICATION QUESTIONS to answer:\n${input.questions.trim()}`);
 
   if (input.mode === "finalize" && input.answers?.length) {

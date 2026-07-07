@@ -8,6 +8,7 @@ export const queryKeys = {
   jobs: ['jobs'] as const,
   job: (id: number) => ['jobs', id] as const,
   documents: (jobId: number) => ['jobs', jobId, 'documents'] as const,
+  chat: (jobId: number) => ['jobs', jobId, 'chat'] as const,
   website: ['website'] as const,
 };
 
@@ -216,6 +217,26 @@ export function useAssessJob(jobId: number) {
 export function useJobChat(jobId: number) {
   return useMutation({
     mutationFn: (messages: ChatMessage[]) => api.jobs.chat(jobId, messages),
+  });
+}
+
+/** The saved advice-chat transcript for a job (persisted server-side). */
+export function useJobChatHistory(jobId: number) {
+  return useQuery({
+    queryKey: queryKeys.chat(jobId),
+    queryFn: () => api.jobs.getChat(jobId),
+    enabled: !!jobId,
+  });
+}
+
+/** Clear the saved advice-chat transcript for a job ("New chat"). */
+export function useClearJobChat(jobId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.jobs.clearChat(jobId),
+    onSuccess: () => {
+      queryClient.setQueryData(queryKeys.chat(jobId), { messages: [] });
+    },
   });
 }
 

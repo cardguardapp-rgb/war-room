@@ -158,6 +158,19 @@ export async function chatComplete(opts: {
   return messageText(message);
 }
 
+/**
+ * Pull the human-readable message out of an Anthropic API error body. The SDK
+ * stores the parsed response body on `err.error`, which is shaped like
+ * `{ type: "error", error: { type, message } }`. Returns "" if nothing usable.
+ */
+function anthropicApiMessage(err: unknown): string {
+  const body = (err as { error?: unknown }).error as
+    | { message?: unknown; error?: { message?: unknown } }
+    | undefined;
+  const msg = body?.error?.message ?? body?.message;
+  return typeof msg === "string" ? msg.trim() : "";
+}
+
 /** Map an error from the AI layer to an HTTP status + user-facing message. */
 export function aiErrorResponse(err: unknown): { status: number; error: string } {
   if (err instanceof AiConfigError) {
@@ -179,9 +192,21 @@ export function aiErrorResponse(err: unknown): { status: number; error: string }
         error: "The AI service is rate limited right now. Please try again in a moment.",
       };
     }
+    const apiMessage = anthropicApiMessage(err);
+    // A low-balance/billing 400 isn't a code problem — surface it plainly so the
+    // user knows to top up their Anthropic credits rather than debug the app.
+    if (/credit|billing|balance|quota/i.test(apiMessage)) {
+      return {
+        status: 503,
+        error: `Anthropic API: ${apiMessage}`,
+      };
+    }
+    // Otherwise pass through the API's own explanation when we have one.
     return {
       status: 502,
-      error: `The AI request failed (${err.status ?? "network error"}). Please try again.`,
+      error: apiMessage
+        ? `The AI request failed: ${apiMessage}`
+        : `The AI request failed (${err.status ?? "network error"}). Please try again.`,
     };
   }
   if (err instanceof Error) return { status: 500, error: err.message };

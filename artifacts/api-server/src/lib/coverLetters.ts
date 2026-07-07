@@ -23,6 +23,8 @@ export interface CoverLetterInput {
   answers?: QaPair[];
   editRequest?: string;
   current?: CoverLetterResult;
+  /** Optional grounding from the saved role-advice chat (see chatStore). */
+  coachingNotes?: string;
 }
 
 function buildUserContent(input: CoverLetterInput): string {
@@ -34,6 +36,9 @@ function buildUserContent(input: CoverLetterInput): string {
     )}`,
   );
   parts.push(`\n\nEXTRA ANSWERS (JSON):\n${JSON.stringify(input.extraAnswers ?? [])}`);
+  if (input.coachingNotes?.trim()) {
+    parts.push(`\n\n${input.coachingNotes.trim()}`);
+  }
 
   if (input.mode === "finalize") {
     if (input.answers?.length) {
