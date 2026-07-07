@@ -33,6 +33,7 @@ import { api, type Document, type JobStatus } from "@/lib/api";
 import { TailorFlow } from "@/components/jobs/TailorFlow";
 import { CoverLetterFlow } from "@/components/jobs/CoverLetterFlow";
 import { AppQuestions } from "@/components/jobs/AppQuestions";
+import { RoleChat } from "@/components/jobs/RoleChat";
 import { CopyButton } from "@/components/jobs/CopyButton";
 
 const statusColors: Record<JobStatus, string> = {
@@ -316,6 +317,7 @@ export default function JobDetail() {
       )}
 
       {/* AI flows */}
+      <RoleChat job={job} />
       <TailorFlow job={job} alreadyTailored={!!resumeDoc} />
       <CoverLetterFlow job={job} alreadySaved={!!coverDoc} />
       <AppQuestions job={job} />

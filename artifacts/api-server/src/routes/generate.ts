@@ -3,7 +3,8 @@ import { inArray } from "drizzle-orm";
 import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job } from "../lib/db";
 import { serializeDocument } from "../lib/serialize";
 import { deleteObject } from "../lib/objectStore";
-import { aiErrorResponse } from "../lib/anthropic";
+import { aiErrorResponse, chatComplete, type ChatMessage } from "../lib/anthropic";
+import { CHAT_MODEL, CHAT_SYSTEM } from "../lib/prompts";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
 import type { ResumeJson } from "../lib/resumeParser";
@@ -66,6 +67,70 @@ function toQaPairs(value: unknown): QaPair[] {
     })
     .filter((a) => a.question && a.answer);
 }
+
+// --- Role-advice chat ---------------------------------------------------
+
+/** Coerce a client-supplied message list into a safe, bounded ChatMessage[]. */
+function toChatMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) return [];
+  const cleaned = value
+    .map((m) => {
+      const o = (m ?? {}) as Record<string, unknown>;
+      const role = o["role"] === "assistant" ? "assistant" : "user";
+      const content = String(o["content"] ?? "").trim().slice(0, 4000);
+      return { role, content } as ChatMessage;
+    })
+    .filter((m) => m.content.length > 0);
+  // Keep the conversation bounded (last 20 turns) to control token cost.
+  return cleaned.slice(-20);
+}
+
+/** Persona system prompt + the grounding context for this specific role. */
+function buildChatSystem(job: Job, resumeJson: ResumeJson, extraAnswers: unknown): string {
+  return [
+    CHAT_SYSTEM,
+    "",
+    "## CONTEXT FOR THIS CONVERSATION",
+    `ROLE: ${job.title}${job.company ? ` at ${job.company}` : ""}${job.location ? ` — ${job.location}` : ""}`,
+    "",
+    "JOB POSTING:",
+    (job.postingText ?? "").slice(0, 40000),
+    "",
+    "CANDIDATE RESUME (JSON — real, factual):",
+    JSON.stringify(resumeJson),
+    "",
+    "CANDIDATE EXTRA ANSWERS (JSON — additional true facts):",
+    JSON.stringify(extraAnswers ?? []),
+  ].join("\n");
+}
+
+router.post("/jobs/:id/chat", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+  const messages = toChatMessages((req.body ?? {}).messages);
+  if (messages.length === 0 || messages[messages.length - 1]!.role !== "user") {
+    res.status(400).json({ error: "Send at least one message, ending with your question." });
+    return;
+  }
+  const ctx = await loadGenContext(id, res);
+  if (!ctx) return;
+  try {
+    const reply = await chatComplete({
+      model: CHAT_MODEL,
+      system: buildChatSystem(ctx.job, ctx.resumeJson, ctx.extraAnswers),
+      messages,
+      maxTokens: 2048,
+    });
+    res.json({ reply: reply.trim() });
+  } catch (err) {
+    const mapped = aiErrorResponse(err);
+    req.log.error({ err, jobId: id }, "Role chat failed");
+    res.status(mapped.status).json({ error: mapped.error });
+  }
+});
 
 // --- Cover letters ------------------------------------------------------
 

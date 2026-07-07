@@ -6,6 +6,7 @@ import Jobs from "@/pages/jobs";
 import JobDetail from "@/pages/job-detail";
 import Profile from "@/pages/profile";
 import Discover from "@/pages/discover";
+import Website from "@/pages/website";
 const NotFound = () => <div className="p-10 text-center text-xl font-serif text-muted-foreground">Page not found</div>;
 
 import { useAuthStatus } from "@/hooks/use-api";
@@ -34,6 +35,7 @@ export function AppRouter() {
         <Route path="/jobs/:id" component={JobDetail} />
         <Route path="/profile" component={Profile} />
         <Route path="/discover" component={Discover} />
+        <Route path="/website" component={Website} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

@@ -132,6 +132,32 @@ export async function createJson<T = unknown>(opts: {
   });
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/**
+ * Run a plain-text (non-JSON) multi-turn chat completion and return the reply
+ * text. The system prompt is cached (ephemeral) since the grounding context is
+ * re-sent on every turn. Used by the role-advice chat.
+ */
+export async function chatComplete(opts: {
+  system: string;
+  messages: ChatMessage[];
+  model?: string;
+  maxTokens?: number;
+}): Promise<string> {
+  const client = getAnthropic();
+  const message = await client.messages.create({
+    model: opts.model ?? "claude-opus-4-8",
+    max_tokens: opts.maxTokens ?? 2048,
+    system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
+    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+  });
+  return messageText(message);
+}
+
 /** Map an error from the AI layer to an HTTP status + user-facing message. */
 export function aiErrorResponse(err: unknown): { status: number; error: string } {
   if (err instanceof AiConfigError) {

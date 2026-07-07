@@ -6,6 +6,7 @@ import jobsRouter from "./jobs";
 import documentsRouter from "./documents";
 import generateRouter from "./generate";
 import discoverRouter from "./discover";
+import websiteRouter from "./website";
 import { requirePin } from "../middlewares/pinAuth";
 
 const router: IRouter = Router();
@@ -18,5 +19,6 @@ router.use(jobsRouter);
 router.use(documentsRouter);
 router.use(generateRouter);
 router.use(discoverRouter);
+router.use(websiteRouter);
 
 export default router;

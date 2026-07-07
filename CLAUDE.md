@@ -354,6 +354,54 @@ For cover letters / questions the resume passed to the model is the **latest
 approved tailored resume** for that job if one exists, else the base
 `resume_json`.
 
+## Role-advice chat
+
+Conversational career-coach chat scoped to ONE job. `POST /jobs/:id/chat`
+`{ messages: [{role:"user"|"assistant", content}] }` → `{ reply }`. Uses the same
+senior-recruiter persona (`CHAT_SYSTEM` in `prompts.ts`, model `CHAT_MODEL` =
+Opus 4.8) via a new **non-streaming** `chatComplete()` helper in `anthropic.ts`
+(system prompt sent with `cache_control: ephemeral` since the grounding context
+is re-sent each turn). The route (in `generate.ts`) reuses `loadGenContext`
+(needs posting text + a confirmed base resume) and builds the system prompt =
+persona + a CONTEXT block (posting + `resume_json` + extra answers) so advice is
+grounded and never invents experience. Server bounds the history to the last 20
+turns and 4 000 chars/message. **Conversation is NOT persisted** — client-side
+state only (`RoleChat.tsx`), cleared on navigation. Frontend: `RoleChat`
+(bubble UI, starter-prompt chips, Enter-to-send, "Thinking…" indicator, retry on
+error) mounted at the top of the Job Detail AI flows; `api.jobs.chat` +
+`useJobChat` hook. AU English, honest-fit persona.
+
+## Personal website generator
+
+Generates a **downloadable static multi-page website** from `resume_json` + a
+small website-specific config. Design decision: **author here, host elsewhere**
+— do NOT serve the public site from this PIN-gated app (couples uptime/cost +
+security). `lib/siteBuild.ts` is PURE (no I/O): `buildSite(resume, config,
+"files"|"preview")` → a `{ path: contents }` map (index/about/experience/skills/
+education/contact `.html` + `styles.css` + `robots.txt` + `README.txt`); clean
+responsive HTML/CSS, SEO/OG meta, accent-colour CSS var, **no build step**.
+`WebsiteConfig` + `defaultWebsiteConfig`/`normaliseWebsiteConfig` (seed name/
+links/bio from the resume contact+summary). Config is stored in **object
+storage** at fixed key `website/config.json` (NO DB migration). Routes
+(`routes/website.ts`, mounted in `routes/index.ts`, behind `requirePin`):
+`GET/PUT /website` (config), `POST /website/draft` (AI headline/tagline/bio/about
+all at once — `createJson` + `WEBSITE_DRAFT_SYSTEM`/`WEBSITE_MODEL`=Opus 4.8;
+grounded, never-fabricate, AU English), `POST /website/write` `{field,current,
+instruction}` (**per-field** write/improve for headline|tagline|bio|about — plain
+text via `chatComplete` + `WEBSITE_FIELD_SYSTEM` + a per-field brief in
+`FIELD_SPECS`; the frontend `AiAssist` component renders an "Improve/Write with
+AI" control under each field with suggestion chips + a free-text instruction box,
+hook `useWriteWebsiteField`/`api.website.write`), `GET /website/preview?page=` (self-contained HTML
+for the in-app `<iframe>`/new tab; inlines CSS, links via `?page=`), `GET
+/website/export` (JSZip → `<slug>-website.zip`). Preview/export use the SAVED
+config (the frontend saves before previewing/downloading). Frontend: `pages/
+website.tsx` (route in `AppRouter`, new **"Website" nav tab** w/ Globe icon in
+`AppLayout` — now 4 tabs) — edit basics/bio, toggle which pages to include,
+contact + links editor, **AI-draft** button, Save, Save&preview, Download .zip,
+a **live preview iframe** (re-keys on save), and a deploy guide (Netlify Drop /
+Cloudflare Pages + custom-domain steps; a README.txt is in the zip). `api.website.*`
++ `useWebsite`/`useSaveWebsite`/`useDraftWebsite`.
+
 ## Discover (web job search)
 
 Finds roles across company career sites + job boards, filtered to the user's

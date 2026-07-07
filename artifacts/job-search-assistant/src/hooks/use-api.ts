@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, Job, Profile } from "@/lib/api";
+import { api, Job, Profile, type ChatMessage, type WebsiteConfig } from "@/lib/api";
 
 // Keys
 export const queryKeys = {
@@ -8,6 +8,7 @@ export const queryKeys = {
   jobs: ['jobs'] as const,
   job: (id: number) => ['jobs', id] as const,
   documents: (jobId: number) => ['jobs', jobId, 'documents'] as const,
+  website: ['website'] as const,
 };
 
 // Auth Hooks
@@ -208,6 +209,35 @@ export function useAssessJob(jobId: number) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.documents(jobId) });
     },
+  });
+}
+
+/** Send the role-advice chat history and get the recruiter persona's reply. */
+export function useJobChat(jobId: number) {
+  return useMutation({
+    mutationFn: (messages: ChatMessage[]) => api.jobs.chat(jobId, messages),
+  });
+}
+
+// Personal website
+export function useWebsite() {
+  return useQuery({ queryKey: queryKeys.website, queryFn: () => api.website.get() });
+}
+export function useSaveWebsite() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (config: WebsiteConfig) => api.website.save(config),
+    onSuccess: (data) =>
+      queryClient.setQueryData(queryKeys.website, { config: data.config, has_resume: true }),
+  });
+}
+export function useDraftWebsite() {
+  return useMutation({ mutationFn: () => api.website.draft() });
+}
+export function useWriteWebsiteField() {
+  return useMutation({
+    mutationFn: (v: { field: string; current: string; instruction: string }) =>
+      api.website.write(v.field, v.current, v.instruction),
   });
 }
 

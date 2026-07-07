@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Briefcase, Search, User, LogOut } from "lucide-react";
+import { Briefcase, Search, User, LogOut, Globe } from "lucide-react";
 import { useAuthStatus, useLogout } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +28,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const navItems = [
     { href: "/jobs", label: "Jobs", icon: Briefcase },
     { href: "/discover", label: "Discover", icon: Search },
+    { href: "/website", label: "Website", icon: Globe },
     { href: "/profile", label: "Profile", icon: User },
   ];
 

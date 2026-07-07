@@ -129,6 +129,40 @@ export interface JobAssessment {
   flags: string[];
 }
 
+/** A single turn in the role-advice chat. */
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface WebsiteLink {
+  label: string;
+  url: string;
+}
+
+/** Config for the generated personal website (mirrors api-server/src/lib/siteBuild.ts). */
+export interface WebsiteConfig {
+  siteTitle: string;
+  name: string;
+  headline: string;
+  tagline: string;
+  bio: string;
+  about: string;
+  accent: string;
+  email: string;
+  phone: string;
+  location: string;
+  showPhone: boolean;
+  links: WebsiteLink[];
+  sections: {
+    about: boolean;
+    experience: boolean;
+    education: boolean;
+    skills: boolean;
+    contact: boolean;
+  };
+}
+
 export interface ClarifyingQuestion {
   question: string;
   why: string;
@@ -350,6 +384,8 @@ export const api = {
       fetchApi<Job>(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: number) => fetchApi<void>(`/jobs/${id}`, { method: "DELETE" }),
     assess: (id: number) => fetchApi<Document>(`/jobs/${id}/assess`, { method: "POST" }),
+    chat: (id: number, messages: ChatMessage[]) =>
+      fetchApi<{ reply: string }>(`/jobs/${id}/chat`, { method: "POST", body: JSON.stringify({ messages }) }),
     // Tailoring flow
     tailorStart: (id: number) => fetchApi<TailorResult>(`/jobs/${id}/tailor`, { method: "POST" }),
     recordQa: (id: number, data: { question: string; answer: string }) =>
@@ -393,5 +429,22 @@ export const api = {
       }),
     dismiss: (url: string) =>
       fetchApi<{ dismissed: true }>("/discover/dismiss", { method: "POST", body: JSON.stringify({ url }) }),
+  },
+
+  website: {
+    get: () => fetchApi<{ config: WebsiteConfig; has_resume: boolean }>("/website"),
+    save: (config: WebsiteConfig) =>
+      fetchApi<{ config: WebsiteConfig }>("/website", { method: "PUT", body: JSON.stringify({ config }) }),
+    draft: () =>
+      fetchApi<{ headline: string; tagline: string; bio: string; about: string }>("/website/draft", {
+        method: "POST",
+      }),
+    write: (field: string, current: string, instruction: string) =>
+      fetchApi<{ text: string }>("/website/write", {
+        method: "POST",
+        body: JSON.stringify({ field, current, instruction }),
+      }),
+    exportUrl: () => `${BASE_PATH}/website/export`,
+    previewUrl: (page = "index") => `${BASE_PATH}/website/preview?page=${encodeURIComponent(page)}`,
   },
 };
