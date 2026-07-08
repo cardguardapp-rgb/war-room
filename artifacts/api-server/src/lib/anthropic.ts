@@ -132,6 +132,51 @@ export async function createJson<T = unknown>(opts: {
   });
 }
 
+/** A base64-encoded image to send to a vision model. */
+export interface ImageInput {
+  /** e.g. "image/png", "image/jpeg", "image/webp", "image/gif". */
+  mediaType: string;
+  /** The image bytes, base64-encoded (no data: prefix). */
+  dataBase64: string;
+}
+
+/**
+ * Non-streaming JSON request over one or more IMAGES plus an instruction. Used
+ * to transcribe + classify a job posting from screenshot(s). Retries once on
+ * malformed JSON.
+ */
+export async function createJsonFromImages<T = unknown>(opts: {
+  model: string;
+  system: string;
+  user: string;
+  images: ImageInput[];
+  maxTokens?: number;
+}): Promise<T> {
+  const client = getAnthropic();
+  const content = [
+    ...opts.images.map((img) => ({
+      type: "image" as const,
+      source: {
+        type: "base64" as const,
+        media_type: img.mediaType,
+        data: img.dataBase64,
+      },
+    })),
+    { type: "text" as const, text: opts.user },
+  ];
+  return parseJsonWithRetry<T>(async () => {
+    const message = await client.messages.create({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 2048,
+      system: opts.system,
+      // Cast: the mixed image/text content block array is valid at the API but
+      // trips the SDK's overloaded typing here.
+      messages: [{ role: "user", content: content as unknown as string }],
+    });
+    return messageText(message);
+  });
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;

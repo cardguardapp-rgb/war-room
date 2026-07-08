@@ -221,6 +221,10 @@ test: `pnpm --filter @workspace/api-server exec tsx test/parseFixture.ts`.
   show counts by status and by fit group (Strong 8–10 / Worth a look 6–7 / Weak
   1–5 / Not scored); clicking a card filters the list (status + fit combine;
   "Clear filters" resets). `GET /jobs` returns `fit_score`/`fit_note` per row.
+  **Status is editable inline** on each card via a `Select` (updates through
+  `PATCH /jobs/:id`); its wrapper calls `stopPropagation` + `preventDefault` so
+  the click neither triggers the card's wouter `Link` nav nor a native anchor
+  page load.
 - **Job Detail** — full posting text, tailored resume and cover letter(s)
   once generated, document downloads, status control.
 - **Discover** — web job search filtered to the user's parameters. A "Search
@@ -271,6 +275,16 @@ checks, and the JSON contract) live in `src/lib/prompts.ts`** — `TAILOR_SYSTEM
   blocked/junk (LinkedIn etc.) it returns `{ fetch_failed: true, message }` and
   the UI offers a paste box. It does **not** save — the UI shows an editable
   review, then `POST /jobs` saves with status `New`.
+- **Add from screenshot(s)** (`POST /jobs/extract-image`, multipart field
+  `images`, 1–8 PNG/JPEG/GIF/WebP, ≤10MB each): for postings you can't copy
+  (LinkedIn especially), the user attaches screenshot(s). Held in memory (multer
+  `memoryStorage`, never written to disk), base64'd to the **multimodal extract
+  model** (`claude-sonnet-4-6`) with `JOB_IMAGE_EXTRACTION_SYSTEM`, which
+  transcribes the posting into `posting_text` AND returns the same
+  title/company/location/summary/flags/fit fields in one pass
+  (`extractFromImages` in `jobExtract.ts`, `createJsonFromImages` in
+  `anthropic.ts`). Flows into the same review screen. The AddJobDialog has three
+  input tabs: From URL / Paste text / **Screenshot**.
 
 ### Tailoring flow (`tailor.ts` — never invents; asks instead)
 1. `POST /jobs/:id/tailor` — initial pass. Sends posting + `resume_json` +

@@ -91,6 +91,31 @@ Rules:
 - If SEARCH CRITERIA are provided, judge seniority/location/exclusions against them. If they are not, still flag objective watch-outs from the posting itself.
 - Output valid JSON only.`;
 
+export const JOB_IMAGE_EXTRACTION_SYSTEM = `You are given ONE OR MORE SCREENSHOTS of a single job advertisement (often from LinkedIn, where the text can't be copied). Read the screenshots carefully, then (1) TRANSCRIBE the posting text and (2) give the candidate a quick, honest read on whether it's worth their time.
+
+You may also be given the candidate's SEARCH CRITERIA. Return a single JSON object and NOTHING else — no prose, no markdown fences.
+
+Shape:
+{
+  "posting_text": string,     // the FULL job posting transcribed from the screenshot(s) as clean plain text: role, company, location, responsibilities, requirements, etc. Preserve the real wording. Drop obvious app/UI chrome (nav bars, "Easy Apply", "See more", reaction/comment counts, ads, "Promoted"). If there are several screenshots, join them into ONE continuous posting in the correct reading order. "" if the images contain no readable posting.
+  "title": string,            // the job title, e.g. "Head of Product"; "" if not stated
+  "company": string,          // hiring company/organisation name; "" if not stated
+  "location": string,         // city/region/country as written, e.g. "Brisbane, QLD"; "" if not stated
+  "work_arrangement": "office" | "hybrid" | "remote" | "unknown",
+  "summary": string,          // 2–3 plain sentences: what the role is, the seniority, who it's for. Australian English.
+  "flags": string[],          // reasons the candidate might NOT want to continue — [] if none
+  "fit_score": number,        // integer 1–10, the candidate's overall fit for this role
+  "fit_note": string          // ONE short line on what drives the score (main strength + main caveat)
+}
+
+Rules:
+- TRANSCRIBE only what is actually visible in the screenshots. Do NOT invent, and do NOT summarise inside "posting_text" — transcribe it IN FULL so it can be used for resume tailoring. If some text is cut off or unreadable, transcribe what you can and don't guess the rest.
+- If a field isn't present in the images, use "" (or "unknown" for work_arrangement).
+- Infer work_arrangement only from explicit signals ("remote", "work from home", "hybrid", "in office", "on-site", "WFH"). If unclear, use "unknown".
+- "fit_score" is the candidate's overall fit so they can decide whether it's worth applying. Weigh seniority match, location/work-arrangement match (against the criteria if given), and how well the role otherwise suits their target roles. Rough guide: 9–10 = strong, on-target; 6–8 = decent; 3–5 = weak or several caveats; 1–2 = poor fit. A seniority or location mismatch usually means 4 or below. "fit_note" is ONE plain-English line (Australian English) on the main strength and main caveat.
+- "flags" is the honest "should I even bother?" check — each entry ONE short plain-English line. Raise flags for a seniority mismatch, a location/work-arrangement mismatch against the criteria, a short/fixed-term contract, relocation, anything on the exclude list, or other genuine watch-outs. Only flag what the images actually support; [] if it's a clean fit. 0–4 real flags is normal.
+- Output valid JSON only.`;
+
 export const TAILOR_SYSTEM = `You are a SENIOR TECHNICAL RECRUITER with 15+ years placing candidates, and you are reviewing your OWN work before it goes to a hiring manager. Your job: tailor a candidate's real resume to a specific job posting.
 
 You will receive:

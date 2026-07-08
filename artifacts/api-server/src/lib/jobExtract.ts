@@ -1,7 +1,7 @@
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
-import { createJson } from "./anthropic";
-import { EXTRACT_MODEL, JOB_EXTRACTION_SYSTEM } from "./prompts";
+import { createJson, createJsonFromImages, type ImageInput } from "./anthropic";
+import { EXTRACT_MODEL, JOB_EXTRACTION_SYSTEM, JOB_IMAGE_EXTRACTION_SYSTEM } from "./prompts";
 
 export type WorkArrangement = "office" | "hybrid" | "remote" | "unknown";
 
@@ -132,11 +132,7 @@ function extractUserContent(rawText: string, criteria?: JobCriteria): string {
   return `${crit}\n\n${posting}`;
 }
 
-/** Ask the model for the metadata fields, plus a summary and honest flags. */
-async function extractMeta(
-  rawText: string,
-  criteria?: JobCriteria,
-): Promise<{
+type ExtractedMeta = {
   title: string;
   company: string;
   location: string;
@@ -145,13 +141,10 @@ async function extractMeta(
   flags: string[];
   fit_score: number;
   fit_note: string;
-}> {
-  const p = await createJson<Partial<ExtractedJob>>({
-    model: EXTRACT_MODEL,
-    maxTokens: 1500,
-    system: JOB_EXTRACTION_SYSTEM,
-    user: extractUserContent(rawText, criteria),
-  });
+};
+
+/** Coerce the model's raw parsed object into safe, typed metadata. */
+function coerceExtracted(p: Partial<ExtractedJob>): ExtractedMeta {
   const wa = p.work_arrangement;
   const flags = Array.isArray(p.flags)
     ? p.flags.map((f) => String(f ?? "").trim()).filter((f) => f.length > 0)
@@ -172,6 +165,66 @@ async function extractMeta(
     fit_score,
     fit_note: (p.fit_note ?? "").trim(),
   };
+}
+
+/** Ask the model for the metadata fields, plus a summary and honest flags. */
+async function extractMeta(
+  rawText: string,
+  criteria?: JobCriteria,
+): Promise<ExtractedMeta> {
+  const p = await createJson<Partial<ExtractedJob>>({
+    model: EXTRACT_MODEL,
+    maxTokens: 1500,
+    system: JOB_EXTRACTION_SYSTEM,
+    user: extractUserContent(rawText, criteria),
+  });
+  return coerceExtracted(p);
+}
+
+/** The instruction (plus optional criteria) that accompanies the screenshot(s). */
+function imageUserContent(criteria?: JobCriteria): string {
+  const instruction =
+    "The attached image(s) are screenshot(s) of a single job posting. Transcribe the posting into \"posting_text\" and analyse it per your instructions.";
+  const hasCriteria =
+    criteria &&
+    ((criteria.roleTitles && criteria.roleTitles.length) ||
+      criteria.officeRegion ||
+      criteria.remoteRule ||
+      (criteria.exclusions && criteria.exclusions.length));
+  if (!hasCriteria) return instruction;
+  const crit = [
+    "CANDIDATE SEARCH CRITERIA (JSON) — judge seniority/location/exclusions against this when flagging:",
+    JSON.stringify(
+      {
+        target_role_levels: criteria!.roleTitles ?? [],
+        office_or_hybrid_must_be_in: criteria!.officeRegion ?? "",
+        otherwise_remote_rule: criteria!.remoteRule ?? "",
+        exclude: criteria!.exclusions ?? [],
+      },
+      null,
+      2,
+    ),
+  ].join("\n");
+  return `${crit}\n\n${instruction}`;
+}
+
+/**
+ * Extract from SCREENSHOT(S) of a posting (e.g. LinkedIn, which blocks copying).
+ * The model transcribes the posting into `posting_text` and classifies the
+ * metadata in one pass. The transcription becomes the job's posting_text.
+ */
+export async function extractFromImages(
+  images: ImageInput[],
+  criteria?: JobCriteria,
+): Promise<ExtractedJob> {
+  const p = await createJsonFromImages<Partial<ExtractedJob>>({
+    model: EXTRACT_MODEL,
+    maxTokens: 4096,
+    system: JOB_IMAGE_EXTRACTION_SYSTEM,
+    user: imageUserContent(criteria),
+    images,
+  });
+  return { ...coerceExtracted(p), posting_text: (p.posting_text ?? "").trim() };
 }
 
 /**

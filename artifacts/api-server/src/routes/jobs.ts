@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import multer from "multer";
 import { inArray } from "drizzle-orm";
 import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, discoverSettingsTable, type Job, type Profile } from "../lib/db";
 import { serializeJob, serializeDocument } from "../lib/serialize";
 import { deleteObject } from "../lib/objectStore";
 import { aiErrorResponse } from "../lib/anthropic";
 import { loadChat, formatCoachingNotes } from "../lib/chatStore";
-import { extractFromText, extractFromUrl, type JobCriteria } from "../lib/jobExtract";
+import { extractFromImages, extractFromText, extractFromUrl, type JobCriteria } from "../lib/jobExtract";
 import { normaliseSettings } from "../lib/discover";
 import { runTailor, type QaPair } from "../lib/tailor";
 import type { ResumeJson } from "../lib/resumeParser";
@@ -15,6 +16,40 @@ const router: IRouter = Router();
 
 const VALID_STATUSES = ["New", "Tailoring", "Ready", "Applied", "Not Applying"] as const;
 const WORK_ARRANGEMENTS = ["office", "hybrid", "remote", "unknown"];
+
+// Job-posting screenshots (e.g. LinkedIn, which blocks copying) — held in memory
+// and base64'd straight to the vision model; never written to disk.
+const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGES = 8;
+
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_IMAGE_BYTES, files: MAX_IMAGES },
+  fileFilter: (_req, file, cb) => {
+    if (ACCEPTED_IMAGE_TYPES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only PNG, JPEG, GIF or WebP images are accepted."));
+  },
+});
+
+/** Run multer for the screenshots, turning its errors into clean 400s. */
+function uploadImages(req: Request, res: Response, next: NextFunction): void {
+  imageUpload.array("images", MAX_IMAGES)(req, res, (err: unknown) => {
+    if (err) {
+      const message =
+        err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE"
+          ? "Each image must be 10MB or smaller."
+          : err instanceof multer.MulterError && err.code === "LIMIT_FILE_COUNT"
+            ? `Attach at most ${MAX_IMAGES} images.`
+            : err instanceof Error
+              ? err.message
+              : "Could not read the uploaded images.";
+      res.status(400).json({ error: message });
+      return;
+    }
+    next();
+  });
+}
 
 function parseId(raw: unknown): number | null {
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -328,6 +363,30 @@ router.post("/jobs/extract", async (req, res): Promise<void> => {
   } catch (err) {
     const mapped = aiErrorResponse(err);
     req.log.error({ err }, "Job extraction failed");
+    res.status(mapped.status).json({ error: mapped.error });
+  }
+});
+
+// Extract from SCREENSHOT(S) — for postings you can't copy (LinkedIn especially).
+// Multipart field `images` (1..MAX_IMAGES). The vision model transcribes the
+// posting into posting_text and classifies it in one pass. Does not save.
+router.post("/jobs/extract-image", uploadImages, async (req, res): Promise<void> => {
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  if (files.length === 0) {
+    res.status(400).json({ error: "Attach at least one screenshot of the posting." });
+    return;
+  }
+  try {
+    const criteria = await loadCriteria();
+    const images = files.map((f) => ({
+      mediaType: f.mimetype,
+      dataBase64: f.buffer.toString("base64"),
+    }));
+    const data = await extractFromImages(images, criteria);
+    res.json({ fetch_failed: false, ...data });
+  } catch (err) {
+    const mapped = aiErrorResponse(err);
+    req.log.error({ err }, "Job image extraction failed");
     res.status(mapped.status).json({ error: mapped.error });
   }
 });

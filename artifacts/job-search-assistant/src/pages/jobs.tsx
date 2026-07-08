@@ -1,8 +1,14 @@
 import { useMemo, useState } from "react";
-import { useJobs } from "@/hooks/use-api";
+import { useJobs, useUpdateJob } from "@/hooks/use-api";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Plus,
   BriefcaseBusiness,
@@ -106,6 +112,7 @@ function FilterCard({
 
 export default function Jobs() {
   const { data: jobs, isLoading } = useJobs();
+  const updateJob = useUpdateJob();
   const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<JobStatus | null>(null);
@@ -318,12 +325,36 @@ export default function Jobs() {
                   </div>
 
                   <div className="shrink-0 flex flex-row-reverse sm:flex-col items-end gap-2">
-                    <Badge
-                      variant="secondary"
-                      className={`${statusColors[job.status]} border-0 font-medium px-3 py-1 text-xs rounded-full`}
+                    {/* Change status inline. Stop the click reaching the card
+                        Link (stopPropagation) AND cancel the native anchor
+                        navigation (preventDefault) so it doesn't full-page load. */}
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
                     >
-                      {job.status}
-                    </Badge>
+                      <Select
+                        value={job.status}
+                        onValueChange={(v) =>
+                          updateJob.mutate({ id: job.id, data: { status: v as JobStatus } })
+                        }
+                      >
+                        <SelectTrigger
+                          aria-label="Change status"
+                          className={`h-8 w-[140px] justify-between border-0 rounded-full px-3 py-1 text-xs font-medium ${statusColors[job.status]}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {STATUS_ORDER.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              {s}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     {typeof job.fit_score === "number" && job.fit_score > 0 && (
                       <span
                         className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${fitPillClass(job.fit_score)}`}

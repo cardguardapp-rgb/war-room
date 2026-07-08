@@ -382,6 +382,11 @@ export const api = {
     get: (id: number) => fetchApi<Job>(`/jobs/${id}`),
     extract: (data: { url?: string; posting_text?: string }) =>
       fetchApi<ExtractResponse>("/jobs/extract", { method: "POST", body: JSON.stringify(data) }),
+    extractImage: (files: File[]) => {
+      const fd = new FormData();
+      files.forEach((f) => fd.append("images", f));
+      return fetchMultipart<ExtractResponse>("/jobs/extract-image", fd);
+    },
     create: (data: { title: string; company?: string; location?: string; work_arrangement?: WorkArrangement; source_url?: string; posting_text?: string; assessment?: JobAssessment }) =>
       fetchApi<Job>("/jobs", { method: "POST", body: JSON.stringify(data) }),
     update: (id: number, data: Partial<Pick<Job, 'title' | 'company' | 'location' | 'work_arrangement' | 'source_url' | 'posting_text' | 'status'>>) =>

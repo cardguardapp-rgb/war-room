@@ -133,6 +133,13 @@ export function useExtractJob() {
   });
 }
 
+/** Extract a job posting from uploaded screenshot(s) via the vision model. */
+export function useExtractJobImage() {
+  return useMutation({
+    mutationFn: (files: File[]) => api.jobs.extractImage(files),
+  });
+}
+
 export function useTailorStart() {
   const queryClient = useQueryClient();
   return useMutation({

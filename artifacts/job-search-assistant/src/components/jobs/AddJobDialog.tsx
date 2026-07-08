@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useCreateJob, useExtractJob } from "@/hooks/use-api";
+import { useCreateJob, useExtractJob, useExtractJobImage } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,7 +18,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertTriangle, ChevronLeft, Info, Link2, Loader2, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ImageIcon,
+  Info,
+  Link2,
+  Loader2,
+  Sparkles,
+  Upload,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { WorkArrangement } from "@/lib/api";
 
@@ -69,12 +79,14 @@ export function AddJobDialog({
   seed?: JobSeed | null;
 }) {
   const extract = useExtractJob();
+  const extractImage = useExtractJobImage();
   const createJob = useCreateJob();
 
   const [step, setStep] = useState<"input" | "review">("input");
-  const [tab, setTab] = useState<"url" | "text">("url");
+  const [tab, setTab] = useState<"url" | "text" | "image">("url");
   const [url, setUrl] = useState("");
   const [pasteText, setPasteText] = useState("");
+  const [images, setImages] = useState<File[]>([]);
   const [fetchNote, setFetchNote] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const seededRef = useRef(false);
@@ -84,6 +96,7 @@ export function AddJobDialog({
     setTab("url");
     setUrl("");
     setPasteText("");
+    setImages([]);
     setFetchNote(null);
     setDraft(EMPTY);
   };
@@ -175,6 +188,21 @@ export function AddJobDialog({
     );
   };
 
+  const addImages = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const picked = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    setImages((prev) => [...prev, ...picked].slice(0, 8));
+  };
+
+  const handleExtractImages = () => {
+    if (images.length === 0) return;
+    setFetchNote(null);
+    extractImage.mutate(images, {
+      onSuccess: (res) => toReview({ ...res, source_url: url.trim() || undefined }),
+      onError: (err) => toast.error("Couldn't read the screenshot", { description: err.message }),
+    });
+  };
+
   const handleSave = () => {
     if (!draft.title.trim()) {
       toast.error("A job title is required");
@@ -228,13 +256,14 @@ export function AddJobDialog({
         {step === "input" ? (
           <Tabs
             value={tab}
-            onValueChange={(v) => setTab(v as "url" | "text")}
+            onValueChange={(v) => setTab(v as "url" | "text" | "image")}
             className="w-full mt-4"
           >
             <div className="px-6">
-              <TabsList className="grid w-full grid-cols-2 p-1 bg-muted/50 rounded-lg">
+              <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-lg">
                 <TabsTrigger value="url" className="rounded-md">From URL</TabsTrigger>
                 <TabsTrigger value="text" className="rounded-md">Paste text</TabsTrigger>
+                <TabsTrigger value="image" className="rounded-md">Screenshot</TabsTrigger>
               </TabsList>
             </div>
 
@@ -298,6 +327,78 @@ export function AddJobDialog({
                   {extract.isPending ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Extracting…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" /> Extract &amp; review
+                    </>
+                  )}
+                </Button>
+              </TabsContent>
+
+              <TabsContent value="image" className="m-0 space-y-3">
+                <div className="space-y-2">
+                  <Label>Screenshot(s) of the posting</Label>
+                  <label
+                    htmlFor="job-images"
+                    className="flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card px-4 py-8 text-center cursor-pointer hover:border-primary/40 transition-colors"
+                  >
+                    <Upload className="w-6 h-6 text-muted-foreground" />
+                    <span className="text-sm font-medium">Tap to add images</span>
+                    <span className="text-xs text-muted-foreground">
+                      PNG, JPEG, GIF or WebP · up to 8 · 10MB each
+                    </span>
+                    <input
+                      id="job-images"
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        addImages(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Perfect for LinkedIn, where the text can't be copied — screenshot the posting
+                    (several shots are fine) and we'll read it. Add them in reading order.
+                  </p>
+                </div>
+
+                {images.length > 0 && (
+                  <ul className="space-y-2">
+                    {images.map((file, i) => (
+                      <li
+                        key={i}
+                        className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm"
+                      >
+                        <ImageIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {(file.size / 1024).toFixed(0)} KB
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${file.name}`}
+                          onClick={() => setImages((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <Button
+                  className="w-full h-12 rounded-xl"
+                  onClick={handleExtractImages}
+                  disabled={images.length === 0 || extractImage.isPending}
+                >
+                  {extractImage.isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Reading screenshot…
                     </>
                   ) : (
                     <>
