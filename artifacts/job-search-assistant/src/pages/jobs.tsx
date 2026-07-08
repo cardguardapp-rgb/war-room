@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useJobs } from "@/hooks/use-api";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -39,10 +39,110 @@ function fitPillClass(score: number): string {
   return "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300";
 }
 
+const STATUS_ORDER: JobStatus[] = ["New", "Tailoring", "Ready", "Applied", "Not Applying"];
+
+const statusDot: Record<JobStatus, string> = {
+  New: "bg-blue-500",
+  Tailoring: "bg-amber-500",
+  Ready: "bg-emerald-500",
+  Applied: "bg-purple-500",
+  "Not Applying": "bg-slate-400",
+};
+
+type FitGroup = "strong" | "look" | "weak" | "unscored";
+
+/** Fit buckets for the filter cards. `match` decides which bucket a job falls in. */
+const FIT_GROUPS: {
+  key: FitGroup;
+  label: string;
+  range: string;
+  dot: string;
+  match: (score: number | null | undefined) => boolean;
+}[] = [
+  { key: "strong", label: "Strong fit", range: "8–10", dot: "bg-emerald-500", match: (s) => typeof s === "number" && s >= 8 },
+  { key: "look", label: "Worth a look", range: "6–7", dot: "bg-amber-500", match: (s) => typeof s === "number" && s >= 6 && s < 8 },
+  { key: "weak", label: "Weak fit", range: "1–5", dot: "bg-rose-500", match: (s) => typeof s === "number" && s >= 1 && s < 6 },
+  { key: "unscored", label: "Not scored", range: "—", dot: "bg-slate-400", match: (s) => !(typeof s === "number" && s > 0) },
+];
+
+/** A clickable count card used for the status + fit filters. */
+function FilterCard({
+  label,
+  sublabel,
+  count,
+  dot,
+  active,
+  onClick,
+}: {
+  label: string;
+  sublabel?: string;
+  count: number;
+  dot: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={`flex items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition-all ${
+        active
+          ? "border-primary bg-primary/5 ring-1 ring-primary/40"
+          : "border-border bg-card hover:border-primary/30"
+      }`}
+    >
+      <span className="text-xl font-semibold tabular-nums leading-none">{count}</span>
+      <span className="flex flex-col">
+        <span className="flex items-center gap-1.5 text-xs font-medium leading-tight">
+          <span className={`inline-block w-2 h-2 rounded-full ${dot}`} />
+          {label}
+        </span>
+        {sublabel && <span className="text-[10px] text-muted-foreground leading-tight">{sublabel}</span>}
+      </span>
+    </button>
+  );
+}
+
 export default function Jobs() {
   const { data: jobs, isLoading } = useJobs();
   const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<JobStatus | null>(null);
+  const [fitFilter, setFitFilter] = useState<FitGroup | null>(null);
+
+  const statusCounts = useMemo(() => {
+    const m = Object.fromEntries(STATUS_ORDER.map((s) => [s, 0])) as Record<JobStatus, number>;
+    (jobs ?? []).forEach((j) => {
+      if (m[j.status] !== undefined) m[j.status] += 1;
+    });
+    return m;
+  }, [jobs]);
+
+  const fitCounts = useMemo(() => {
+    const m = Object.fromEntries(FIT_GROUPS.map((g) => [g.key, 0])) as Record<FitGroup, number>;
+    (jobs ?? []).forEach((j) => {
+      const g = FIT_GROUPS.find((g) => g.match(j.fit_score));
+      if (g) m[g.key] += 1;
+    });
+    return m;
+  }, [jobs]);
+
+  const filtered = useMemo(
+    () =>
+      (jobs ?? []).filter(
+        (j) =>
+          (!statusFilter || j.status === statusFilter) &&
+          (!fitFilter || FIT_GROUPS.find((g) => g.key === fitFilter)!.match(j.fit_score)),
+      ),
+    [jobs, statusFilter, fitFilter],
+  );
+
+  const hasFilter = statusFilter !== null || fitFilter !== null;
+  const clearFilters = () => {
+    setStatusFilter(null);
+    setFitFilter(null);
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -98,8 +198,78 @@ export default function Jobs() {
           </Button>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
-          {jobs?.map((job, index) => (
+        <div className="space-y-6">
+          {/* Filter cards — counts by status and by fit group; click to filter. */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Filter
+              </p>
+              {hasFilter && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                Status
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {STATUS_ORDER.filter((s) => statusCounts[s] > 0).map((s) => (
+                  <FilterCard
+                    key={s}
+                    label={s}
+                    count={statusCounts[s]}
+                    dot={statusDot[s]}
+                    active={statusFilter === s}
+                    onClick={() => setStatusFilter((f) => (f === s ? null : s))}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                Fit
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {FIT_GROUPS.filter((g) => fitCounts[g.key] > 0).map((g) => (
+                  <FilterCard
+                    key={g.key}
+                    label={g.label}
+                    sublabel={g.range}
+                    count={fitCounts[g.key]}
+                    dot={g.dot}
+                    active={fitFilter === g.key}
+                    onClick={() => setFitFilter((f) => (f === g.key ? null : g.key))}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {hasFilter && (
+              <p className="text-xs text-muted-foreground">
+                Showing {filtered.length} of {jobs?.length}
+              </p>
+            )}
+          </div>
+
+          {filtered.length === 0 ? (
+            <div className="text-center py-14 px-4 rounded-2xl border border-dashed border-border bg-card/50">
+              <p className="text-muted-foreground mb-3">No jobs match this filter.</p>
+              <Button variant="outline" onClick={clearFilters} className="rounded-xl">
+                Clear filters
+              </Button>
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+              {filtered.map((job, index) => (
             <Link key={job.id} href={`/jobs/${job.id}`}>
               <div
                 className="group block p-5 rounded-2xl border border-border bg-card hover:border-primary/30 hover:shadow-md transition-all cursor-pointer animate-in fade-in slide-in-from-bottom-4"
@@ -166,7 +336,9 @@ export default function Jobs() {
                 </div>
               </div>
             </Link>
-          ))}
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

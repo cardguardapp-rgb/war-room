@@ -213,7 +213,14 @@ test: `pnpm --filter @workspace/api-server exec tsx test/parseFixture.ts`.
   the parsed structure. UI lives in `src/pages/profile.tsx` +
   `src/components/profile/*`.
 - **Jobs** — list of tracked jobs with status badges (New / Tailoring /
-  Ready / Applied), add a job by pasting a URL or the raw posting text.
+  Ready / Applied / Not Applying) and a **fit pill** (from the saved
+  assessment). Add a job by pasting a URL or the raw posting text. On create,
+  `POST /jobs` **auto-generates the fit assessment** from the posting when one
+  wasn't supplied (e.g. saved from Discover), so the score shows in the list
+  immediately (best-effort — never blocks creation). **Filter cards** at the top
+  show counts by status and by fit group (Strong 8–10 / Worth a look 6–7 / Weak
+  1–5 / Not scored); clicking a card filters the list (status + fit combine;
+  "Clear filters" resets). `GET /jobs` returns `fit_score`/`fit_note` per row.
 - **Job Detail** — full posting text, tailored resume and cover letter(s)
   once generated, document downloads, status control.
 - **Discover** — web job search filtered to the user's parameters. A "Search

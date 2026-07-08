@@ -120,7 +120,8 @@ router.post("/jobs", async (req, res): Promise<void> => {
     .returning();
 
   // Persist the fit assessment (from extraction) as an `assessment` document so
-  // it's visible later on the Job Detail page, not just on the add-review screen.
+  // it's visible later on the Job Detail page and the Jobs list, not just on the
+  // add-review screen.
   const normalisedAssessment = normaliseAssessment(assessment);
   if (normalisedAssessment) {
     await db.insert(documentsTable).values({
@@ -128,6 +129,29 @@ router.post("/jobs", async (req, res): Promise<void> => {
       type: "assessment",
       contentJson: normalisedAssessment,
     });
+  } else if (row.postingText && row.postingText.trim().length > 0) {
+    // No assessment supplied (e.g. saved from Discover, or added without a
+    // review step) — auto-generate one from the posting so the fit score shows
+    // immediately in the list. Never block job creation if the AI call fails.
+    try {
+      const criteria = await loadCriteria();
+      const meta = await extractFromText(row.postingText, criteria);
+      const auto = normaliseAssessment({
+        fit_score: meta.fit_score,
+        fit_note: meta.fit_note,
+        summary: meta.summary,
+        flags: meta.flags,
+      });
+      if (auto) {
+        await db.insert(documentsTable).values({
+          jobId: row.id,
+          type: "assessment",
+          contentJson: auto,
+        });
+      }
+    } catch (err) {
+      req.log.warn({ err, jobId: row.id }, "Auto fit-assessment on create failed");
+    }
   }
 
   res.status(201).json(serializeJob(row));
