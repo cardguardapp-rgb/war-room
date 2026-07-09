@@ -41,8 +41,23 @@ const statusColors: Record<JobStatus, string> = {
   Tailoring: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
   Ready: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300",
   Applied: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300",
+  Interview: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300",
+  Offer: "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300",
+  Rejected: "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300",
   "Not Applying": "bg-slate-100 text-slate-600 dark:bg-slate-800/50 dark:text-slate-400",
 };
+
+/** Pipeline order for the status dropdown. */
+const STATUS_ORDER: JobStatus[] = [
+  "New",
+  "Tailoring",
+  "Ready",
+  "Applied",
+  "Interview",
+  "Offer",
+  "Rejected",
+  "Not Applying",
+];
 
 const arrangementLabels: Record<string, string> = { office: "Office", hybrid: "Hybrid", remote: "Remote" };
 
@@ -173,11 +188,11 @@ export default function JobDetail() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="New">New</SelectItem>
-              <SelectItem value="Tailoring">Tailoring</SelectItem>
-              <SelectItem value="Ready">Ready</SelectItem>
-              <SelectItem value="Applied">Applied</SelectItem>
-              <SelectItem value="Not Applying">Not Applying</SelectItem>
+              {STATUS_ORDER.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
 

@@ -91,7 +91,15 @@ async function fetchMultipart<T>(path: string, formData: FormData): Promise<T> {
   return response.json();
 }
 
-export type JobStatus = 'New' | 'Tailoring' | 'Ready' | 'Applied' | 'Not Applying';
+export type JobStatus =
+  | 'New'
+  | 'Tailoring'
+  | 'Ready'
+  | 'Applied'
+  | 'Interview'
+  | 'Offer'
+  | 'Rejected'
+  | 'Not Applying';
 export type WorkArrangement = 'office' | 'hybrid' | 'remote' | 'unknown';
 
 export interface Job {

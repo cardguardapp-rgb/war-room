@@ -14,7 +14,16 @@ import type { ResumeJson } from "../lib/resumeParser";
 
 const router: IRouter = Router();
 
-const VALID_STATUSES = ["New", "Tailoring", "Ready", "Applied", "Not Applying"] as const;
+const VALID_STATUSES = [
+  "New",
+  "Tailoring",
+  "Ready",
+  "Applied",
+  "Interview",
+  "Offer",
+  "Rejected",
+  "Not Applying",
+] as const;
 const WORK_ARRANGEMENTS = ["office", "hybrid", "remote", "unknown"];
 
 // Job-posting screenshots (e.g. LinkedIn, which blocks copying) — held in memory

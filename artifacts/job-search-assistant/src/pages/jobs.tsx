@@ -29,6 +29,9 @@ const statusColors: Record<JobStatus, string> = {
   Tailoring: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
   Ready: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300",
   Applied: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300",
+  Interview: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300",
+  Offer: "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300",
+  Rejected: "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300",
   "Not Applying": "bg-slate-100 text-slate-600 dark:bg-slate-800/50 dark:text-slate-400",
 };
 
@@ -45,13 +48,26 @@ function fitPillClass(score: number): string {
   return "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300";
 }
 
-const STATUS_ORDER: JobStatus[] = ["New", "Tailoring", "Ready", "Applied", "Not Applying"];
+/** Pipeline order — drives the status dropdown and the filter cards. */
+const STATUS_ORDER: JobStatus[] = [
+  "New",
+  "Tailoring",
+  "Ready",
+  "Applied",
+  "Interview",
+  "Offer",
+  "Rejected",
+  "Not Applying",
+];
 
 const statusDot: Record<JobStatus, string> = {
   New: "bg-blue-500",
   Tailoring: "bg-amber-500",
   Ready: "bg-emerald-500",
   Applied: "bg-purple-500",
+  Interview: "bg-indigo-500",
+  Offer: "bg-teal-500",
+  Rejected: "bg-rose-500",
   "Not Applying": "bg-slate-400",
 };
 

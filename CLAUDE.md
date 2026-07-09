@@ -90,8 +90,13 @@ artifacts/job-search-assistant/
   data + writing-style preferences + answers to recurring application
   questions.
 - **`jobs`** — one row per job the user is tracking. Fields: `title`,
-  `company`, `source_url`, `posting_text`, `status`
-  (`New` → `Tailoring` → `Ready` → `Applied`), `created_at`.
+  `company`, `source_url`, `posting_text`, `status`, `created_at`.
+  `status` is a plain **text** column (default `'New'`, no enum/check
+  constraint), so adding a status needs **no migration** — just extend
+  `VALID_STATUSES` in `routes/jobs.ts` and the `JobStatus` union +
+  `statusColors`/`statusDot`/`STATUS_ORDER` in the frontend. Pipeline order:
+  `New` → `Tailoring` → `Ready` → `Applied` → `Interview` → `Offer` →
+  `Rejected` → `Not Applying`.
 - **`documents`** — generated artefacts tied to a job (`job_id`, cascade
   delete). `type` is free text; current values: `resume`, `cover_letter`,
   `cover_letter_plain`, `cover_note`, `assessment` (the fit score/summary/flags,
