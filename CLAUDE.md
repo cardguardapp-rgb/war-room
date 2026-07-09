@@ -208,7 +208,12 @@ test: `pnpm --filter @workspace/api-server exec tsx test/parseFixture.ts`.
 - **Profile** — upload/replace the base resume (`.docx` only, 5MB). On upload
   it parses into a structured review screen (sections editable inline, each
   section's `kind` reassignable, unclassified content flagged); confirming
-  saves it as the source of truth. Also shows the detected formatting (style
+  saves it as the source of truth. **Everything is reorderable** via up/down
+  arrows — sections, roles, education items, and every bullet/skill/summary
+  paragraph/detail line (`moveAt` helper + a `MoveHeader` on each role/education
+  card; arrows in `LineList`). Roles also have a **"Sort by date (newest first)"**
+  button that parses each role's free-text `dates` (`sortExperienceByDate` in
+  `ResumeReview.tsx`; "Present"/"Current" sorts to the top, undated roles sink). Also shows the detected formatting (style
   map) and a saved-answers (Q/A) editor. Re-uploading warns before replacing
   the parsed structure. UI lives in `src/pages/profile.tsx` +
   `src/components/profile/*`.

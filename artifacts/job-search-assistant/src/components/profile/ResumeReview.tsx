@@ -12,8 +12,11 @@ import {
 import {
   AlertTriangle,
   ArrowDown,
+  ArrowDownUp,
   ArrowUp,
   Check,
+  ChevronDown,
+  ChevronUp,
   Plus,
   Trash2,
   Type,
@@ -41,6 +44,59 @@ const setAt = <T,>(arr: T[], i: number, v: T): T[] =>
   arr.map((x, idx) => (idx === i ? v : x));
 const removeAt = <T,>(arr: T[], i: number): T[] =>
   arr.filter((_, idx) => idx !== i);
+/** Swap item i with its neighbour in the given direction (no-op at the ends). */
+const moveAt = <T,>(arr: T[], i: number, dir: -1 | 1): T[] => {
+  const j = i + dir;
+  if (j < 0 || j >= arr.length) return arr;
+  const copy = [...arr];
+  [copy[i], copy[j]] = [copy[j], copy[i]];
+  return copy;
+};
+
+// --- date-based role sorting (newest first) ---
+const MONTH_INDEX: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+const PRESENT_RE = /present|current|now|ongoing|to ?date|today/;
+
+/** Parse one side of a date range to a sortable number (year*12+month). */
+function parseDatePart(s: string): number | null {
+  const t = s.toLowerCase();
+  if (PRESENT_RE.test(t)) return Number.POSITIVE_INFINITY;
+  const yr = t.match(/(?:19|20)\d{2}/);
+  if (!yr) return null;
+  const mo = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);
+  const month = mo ? (MONTH_INDEX[mo[1]] ?? 0) : 0;
+  return parseInt(yr[0], 10) * 12 + month;
+}
+
+/** Sort key for a role's free-text dates: prefer the END date, then the START. */
+function dateSortKey(dates: string): { end: number; start: number } {
+  const lower = (dates ?? "").toLowerCase().trim();
+  const parts = lower.split(/\s*(?:–|—|-|\bto\b|\buntil\b)\s*/).filter(Boolean);
+  let start: number | null;
+  let end: number | null;
+  if (parts.length >= 2) {
+    start = parseDatePart(parts[0]);
+    end = parseDatePart(parts[parts.length - 1]);
+  } else {
+    start = parseDatePart(lower);
+    end = start;
+  }
+  if (PRESENT_RE.test(lower)) end = Number.POSITIVE_INFINITY;
+  return { end: end ?? Number.NEGATIVE_INFINITY, start: start ?? Number.NEGATIVE_INFINITY };
+}
+
+/** Order roles newest-first; undated roles sink to the bottom. Stable-ish. */
+function sortExperienceByDate(items: ExperienceItem[]): ExperienceItem[] {
+  return [...items].sort((a, b) => {
+    const ka = dateSortKey(a.dates);
+    const kb = dateSortKey(b.dates);
+    if (kb.end !== ka.end) return kb.end - ka.end;
+    if (kb.start !== ka.start) return kb.start - ka.start;
+    return 0;
+  });
+}
 
 interface Props {
   sections: ResumeSection[];
@@ -335,6 +391,11 @@ function SectionBody({
             <ExperienceItemEditor
               key={item.id}
               item={item}
+              index={i}
+              count={section.items.length}
+              onMove={(dir) =>
+                onChange({ ...section, items: moveAt(section.items, i, dir) })
+              }
               onChange={(next) =>
                 onChange({ ...section, items: setAt(section.items, i, next) })
               }
@@ -343,19 +404,33 @@ function SectionBody({
               }
             />
           ))}
-          <Button
-            variant="outline"
-            size="sm"
-            className="rounded-lg"
-            onClick={() =>
-              onChange({
-                ...section,
-                items: [...section.items, newExperienceItem()],
-              })
-            }
-          >
-            <Plus className="w-4 h-4 mr-1" /> Add role
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={() =>
+                onChange({
+                  ...section,
+                  items: [...section.items, newExperienceItem()],
+                })
+              }
+            >
+              <Plus className="w-4 h-4 mr-1" /> Add role
+            </Button>
+            {section.items.length > 1 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                onClick={() =>
+                  onChange({ ...section, items: sortExperienceByDate(section.items) })
+                }
+              >
+                <ArrowDownUp className="w-4 h-4 mr-1" /> Sort by date (newest first)
+              </Button>
+            )}
+          </div>
         </div>
       );
     case "education":
@@ -365,6 +440,11 @@ function SectionBody({
             <EducationItemEditor
               key={item.id}
               item={item}
+              index={i}
+              count={section.items.length}
+              onMove={(dir) =>
+                onChange({ ...section, items: moveAt(section.items, i, dir) })
+              }
               onChange={(next) =>
                 onChange({ ...section, items: setAt(section.items, i, next) })
               }
@@ -412,15 +492,27 @@ function SectionBody({
 
 function ExperienceItemEditor({
   item,
+  index,
+  count,
+  onMove,
   onChange,
   onRemove,
 }: {
   item: ExperienceItem;
+  index: number;
+  count: number;
+  onMove: (dir: -1 | 1) => void;
   onChange: (next: ExperienceItem) => void;
   onRemove: () => void;
 }) {
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-3">
+      <MoveHeader
+        label={`Role ${index + 1}`}
+        index={index}
+        count={count}
+        onMove={onMove}
+      />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Job title">
           <Input
@@ -471,15 +563,27 @@ function ExperienceItemEditor({
 
 function EducationItemEditor({
   item,
+  index,
+  count,
+  onMove,
   onChange,
   onRemove,
 }: {
   item: EducationItem;
+  index: number;
+  count: number;
+  onMove: (dir: -1 | 1) => void;
   onChange: (next: EducationItem) => void;
   onRemove: () => void;
 }) {
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-3">
+      <MoveHeader
+        label={`Qualification ${index + 1}`}
+        index={index}
+        count={count}
+        onMove={onMove}
+      />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Institution">
           <Input
@@ -524,6 +628,49 @@ function EducationItemEditor({
           <Trash2 className="w-4 h-4 mr-1" /> Remove
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** A small header row with a label and up/down move buttons for a list item. */
+function MoveHeader({
+  label,
+  index,
+  count,
+  onMove,
+}: {
+  label: string;
+  index: number;
+  count: number;
+  onMove: (dir: -1 | 1) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {count > 1 && (
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground"
+            disabled={index === 0}
+            onClick={() => onMove(-1)}
+            aria-label="Move up"
+          >
+            <ArrowUp className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground"
+            disabled={index === count - 1}
+            onClick={() => onMove(1)}
+            aria-label="Move down"
+          >
+            <ArrowDown className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -580,15 +727,41 @@ function LineList({
               className="flex-1"
             />
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 shrink-0 text-muted-foreground"
-            onClick={() => onChange(removeAt(values, i))}
-            aria-label="Remove"
-          >
-            <X className="w-4 h-4" />
-          </Button>
+          <div className="flex shrink-0 gap-1">
+            {values.length > 1 && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-muted-foreground"
+                  disabled={i === 0}
+                  onClick={() => onChange(moveAt(values, i, -1))}
+                  aria-label="Move up"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-muted-foreground"
+                  disabled={i === values.length - 1}
+                  onClick={() => onChange(moveAt(values, i, 1))}
+                  aria-label="Move down"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </Button>
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 shrink-0 text-muted-foreground"
+              onClick={() => onChange(removeAt(values, i))}
+              aria-label="Remove"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
       ))}
       <Button
