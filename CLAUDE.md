@@ -364,6 +364,30 @@ For cover letters / questions the resume passed to the model is the **latest
 approved tailored resume** for that job if one exists, else the base
 `resume_json`.
 
+## Role-advice chat: attachments
+
+The chat accepts **file uploads** (interview invite, position description,
+assessment brief, screenshot…): images, PDF, `.docx`, `.txt`, `.md`, `.csv` —
+max 5 files, 15MB each (`lib/chatAttachments.ts`).
+
+**The server owns the transcript.** The client `POST`s only the new question +
+files as **multipart** (`message` + `files`) and gets the full transcript back;
+it does NOT send the history. That's what makes attachments persist: a
+follow-up turn re-sends the stored file, so the model still "sees" it.
+
+- **Images + PDFs** → stored in object storage (`objectKey`), re-fetched and
+  re-sent every turn as `image`/`document` content blocks (`buildTurnContent`).
+- **`.docx`/`.txt`/`.md`/`.csv`** → extracted to plain text at upload and inlined
+  (`docxToText` unzips `word/document.xml` and strips markup — we only need the
+  words here, unlike `resumeParser` which also captures run/style detail).
+- `ChatTurn` gained `attachments: ChatAttachment[]`; `chatComplete`'s
+  `ChatMessage.content` is now `string | unknown[]` (content blocks).
+- `publicTurn()` strips `objectKey`/extracted `text` before returning to the
+  client. `clearChat` also deletes the attachment objects. A failed AI call
+  deletes the just-uploaded objects so they aren't orphaned.
+- Attached files also flow into `formatCoachingNotes`, so an uploaded PD informs
+  future resume tailoring / cover letters for that role.
+
 ## Role-advice chat (persisted + feeds generation)
 
 `RoleChat` (Job Detail) talks to the senior-recruiter persona about one role.

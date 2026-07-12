@@ -1,4 +1,5 @@
-import { Router, type IRouter, type Response } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import multer from "multer";
 import { inArray } from "drizzle-orm";
 import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job } from "../lib/db";
 import { serializeDocument } from "../lib/serialize";
@@ -7,7 +8,21 @@ import { aiErrorResponse, chatComplete, type ChatMessage } from "../lib/anthropi
 import { CHAT_MODEL, CHAT_SYSTEM } from "../lib/prompts";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
-import { clearChat, formatCoachingNotes, loadChat, saveChat } from "../lib/chatStore";
+import {
+  clearChat,
+  formatCoachingNotes,
+  loadChat,
+  saveChat,
+  type ChatAttachment,
+  type ChatTurn,
+} from "../lib/chatStore";
+import {
+  buildTurnContent,
+  ingestAttachment,
+  isAcceptedAttachment,
+  MAX_ATTACHMENTS,
+  MAX_ATTACHMENT_BYTES,
+} from "../lib/chatAttachments";
 import type { ResumeJson } from "../lib/resumeParser";
 import type { QaPair } from "../lib/tailor";
 
@@ -78,19 +93,50 @@ function toQaPairs(value: unknown): QaPair[] {
 
 // --- Role-advice chat ---------------------------------------------------
 
-/** Coerce a client-supplied message list into a safe, bounded ChatMessage[]. */
-function toChatMessages(value: unknown): ChatMessage[] {
-  if (!Array.isArray(value)) return [];
-  const cleaned = value
-    .map((m) => {
-      const o = (m ?? {}) as Record<string, unknown>;
-      const role = o["role"] === "assistant" ? "assistant" : "user";
-      const content = String(o["content"] ?? "").trim().slice(0, 4000);
-      return { role, content } as ChatMessage;
-    })
-    .filter((m) => m.content.length > 0);
-  // Keep the conversation bounded (last 20 turns) to control token cost.
-  return cleaned.slice(-20);
+// Chat attachments — held in memory, then stored/extracted by chatAttachments.
+const chatUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_ATTACHMENT_BYTES, files: MAX_ATTACHMENTS },
+  fileFilter: (_req, file, cb) => {
+    if (isAcceptedAttachment(file.mimetype, file.originalname)) cb(null, true);
+    else cb(new Error("Attach an image, PDF, .docx, .txt, .md or .csv file."));
+  },
+});
+
+/** Run multer for chat attachments, turning its errors into clean 400s. */
+function uploadChatFiles(req: Request, res: Response, next: NextFunction): void {
+  chatUpload.array("files", MAX_ATTACHMENTS)(req, res, (err: unknown) => {
+    if (err) {
+      const message =
+        err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE"
+          ? "Each file must be 15MB or smaller."
+          : err instanceof multer.MulterError && err.code === "LIMIT_FILE_COUNT"
+            ? `Attach at most ${MAX_ATTACHMENTS} files.`
+            : err instanceof Error
+              ? err.message
+              : "Could not read the attached files.";
+      res.status(400).json({ error: message });
+      return;
+    }
+    next();
+  });
+}
+
+/** The client-safe view of a turn — never leaks object keys or extracted text. */
+function publicTurn(t: ChatTurn) {
+  return {
+    role: t.role,
+    content: t.content,
+    ...(t.attachments?.length
+      ? {
+          attachments: t.attachments.map((a) => ({
+            name: a.name,
+            kind: a.kind,
+            mediaType: a.mediaType,
+          })),
+        }
+      : {}),
+  };
 }
 
 /** Persona system prompt + the grounding context for this specific role. */
@@ -112,20 +158,50 @@ function buildChatSystem(job: Job, resumeJson: ResumeJson, extraAnswers: unknown
   ].join("\n");
 }
 
-router.post("/jobs/:id/chat", async (req, res): Promise<void> => {
+// The SERVER owns the transcript: the client sends only the new question (+ any
+// attached files), and we append to what's saved. That's what lets attachments
+// persist — a follow-up turn re-sends the stored image/PDF so the model still
+// sees it, without the client having to round-trip binary data.
+router.post("/jobs/:id/chat", uploadChatFiles, async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id === null) {
     res.status(400).json({ error: "Invalid job id" });
     return;
   }
-  const messages = toChatMessages((req.body ?? {}).messages);
-  if (messages.length === 0 || messages[messages.length - 1]!.role !== "user") {
-    res.status(400).json({ error: "Send at least one message, ending with your question." });
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const message = String((req.body ?? {}).message ?? "").trim().slice(0, 8000);
+  if (!message && files.length === 0) {
+    res.status(400).json({ error: "Type a question or attach a file." });
     return;
   }
+
   const ctx = await loadGenContext(id, res);
   if (!ctx) return;
+
+  // Store/extract the attachments up-front so we can clean them up if the AI
+  // call fails (otherwise they'd be orphaned in object storage).
+  let attachments: ChatAttachment[] = [];
   try {
+    attachments = await Promise.all(files.map((f) => ingestAttachment(f)));
+  } catch (err) {
+    req.log.error({ err, jobId: id }, "Chat attachment ingest failed");
+    res.status(400).json({ error: "Could not read one of the attached files." });
+    return;
+  }
+
+  const history = await loadChat(id);
+  const userTurn: ChatTurn = {
+    role: "user",
+    content: message,
+    ...(attachments.length ? { attachments } : {}),
+  };
+  // Bound what we send to the model (last 20 turns) to control token cost.
+  const turns = [...history, userTurn].slice(-20);
+
+  try {
+    const messages: ChatMessage[] = await Promise.all(
+      turns.map(async (t) => ({ role: t.role, content: await buildTurnContent(t) })),
+    );
     const reply = (
       await chatComplete({
         model: CHAT_MODEL,
@@ -134,11 +210,15 @@ router.post("/jobs/:id/chat", async (req, res): Promise<void> => {
         maxTokens: 2048,
       })
     ).trim();
-    // Persist the full transcript (incl. this reply) so it survives reloads and
-    // can feed future resume/letter/answer generation for this role.
-    await saveChat(id, [...messages, { role: "assistant", content: reply }]);
-    res.json({ reply });
+
+    const saved: ChatTurn[] = [...history, userTurn, { role: "assistant", content: reply }];
+    await saveChat(id, saved);
+    res.json({ reply, messages: saved.map(publicTurn) });
   } catch (err) {
+    // Don't strand the just-uploaded objects — nothing was saved.
+    await Promise.all(
+      attachments.map((a) => (a.objectKey ? deleteObject(a.objectKey) : Promise.resolve())),
+    );
     const mapped = aiErrorResponse(err);
     req.log.error({ err, jobId: id }, "Role chat failed");
     res.status(mapped.status).json({ error: mapped.error });
@@ -157,7 +237,7 @@ router.get("/jobs/:id/chat", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Job not found" });
     return;
   }
-  res.json({ messages: await loadChat(id) });
+  res.json({ messages: (await loadChat(id)).map(publicTurn) });
 });
 
 // Clear the saved advice-chat transcript for a job ("New chat").

@@ -141,10 +141,18 @@ export interface JobAssessment {
   flags: string[];
 }
 
+/** A file the candidate attached to a chat turn (client-safe view). */
+export interface ChatAttachment {
+  name: string;
+  kind: 'image' | 'document' | 'text';
+  mediaType: string;
+}
+
 /** A single turn in the role-advice chat. */
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  attachments?: ChatAttachment[];
 }
 
 export interface WebsiteLink {
@@ -401,8 +409,14 @@ export const api = {
       fetchApi<Job>(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: number) => fetchApi<void>(`/jobs/${id}`, { method: "DELETE" }),
     assess: (id: number) => fetchApi<Document>(`/jobs/${id}/assess`, { method: "POST" }),
-    chat: (id: number, messages: ChatMessage[]) =>
-      fetchApi<{ reply: string }>(`/jobs/${id}/chat`, { method: "POST", body: JSON.stringify({ messages }) }),
+    // Multipart: the server owns the transcript, so we send only the new
+    // question plus any attached files, and get the full transcript back.
+    chat: (id: number, message: string, files: File[] = []) => {
+      const fd = new FormData();
+      fd.append("message", message);
+      files.forEach((f) => fd.append("files", f));
+      return fetchMultipart<{ reply: string; messages: ChatMessage[] }>(`/jobs/${id}/chat`, fd);
+    },
     getChat: (id: number) => fetchApi<{ messages: ChatMessage[] }>(`/jobs/${id}/chat`),
     clearChat: (id: number) => fetchApi<void>(`/jobs/${id}/chat`, { method: "DELETE" }),
     // Tailoring flow

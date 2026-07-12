@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, Job, Profile, type ChatMessage, type WebsiteConfig } from "@/lib/api";
+import { api, Job, Profile, type WebsiteConfig } from "@/lib/api";
 
 // Keys
 export const queryKeys = {
@@ -220,10 +220,11 @@ export function useAssessJob(jobId: number) {
   });
 }
 
-/** Send the role-advice chat history and get the recruiter persona's reply. */
+/** Ask the recruiter persona a question about this role, with optional attachments. */
 export function useJobChat(jobId: number) {
   return useMutation({
-    mutationFn: (messages: ChatMessage[]) => api.jobs.chat(jobId, messages),
+    mutationFn: (v: { message: string; files?: File[] }) =>
+      api.jobs.chat(jobId, v.message, v.files ?? []),
   });
 }
 

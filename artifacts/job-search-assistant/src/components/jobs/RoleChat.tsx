@@ -10,8 +10,12 @@ import {
   AlertTriangle,
   Sparkles,
   RotateCcw,
+  Paperclip,
+  FileText,
+  ImageIcon,
+  X,
 } from "lucide-react";
-import type { Job, ChatMessage } from "@/lib/api";
+import type { Job, ChatMessage, ChatAttachment } from "@/lib/api";
 
 const STARTERS = [
   "Am I a strong fit for this role?",
@@ -19,6 +23,37 @@ const STARTERS = [
   "What interview questions should I prepare for?",
   "What are my biggest gaps for this role, and how do I address them?",
 ];
+
+const ACCEPT = "image/*,.pdf,.docx,.txt,.md,.csv";
+const MAX_FILES = 5;
+
+/** Best-effort kind for the optimistic bubble (the server decides for real). */
+function kindOf(file: File): ChatAttachment["kind"] {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))
+    return "document";
+  return "text";
+}
+
+function AttachmentChips({ attachments }: { attachments: ChatAttachment[] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2">
+      {attachments.map((a, i) => (
+        <span
+          key={i}
+          className="inline-flex items-center gap-1 rounded-md bg-background/20 border border-current/20 px-1.5 py-0.5 text-[11px] max-w-[180px]"
+        >
+          {a.kind === "image" ? (
+            <ImageIcon className="w-3 h-3 shrink-0" />
+          ) : (
+            <FileText className="w-3 h-3 shrink-0" />
+          )}
+          <span className="truncate">{a.name}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export function RoleChat({ job }: { job: Job }) {
   const { data: profile } = useProfile();
@@ -28,6 +63,7 @@ export function RoleChat({ job }: { job: Job }) {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const seeded = useRef(false);
@@ -51,21 +87,41 @@ export function RoleChat({ job }: { job: Job }) {
 
   const send = (text: string) => {
     const content = text.trim();
-    if (!content || chat.isPending || disabled) return;
+    const sending = files;
+    if ((!content && sending.length === 0) || chat.isPending || disabled) return;
     setError(null);
-    const next: ChatMessage[] = [...messages, { role: "user", content }];
-    setMessages(next);
-    setInput("");
-    chat.mutate(next, {
-      onSuccess: (res) =>
-        setMessages((m) => [...m, { role: "assistant", content: res.reply }]),
-      onError: (err) => {
-        // Drop the unanswered user turn back into the box so it can be retried.
-        setMessages((m) => m.slice(0, -1));
-        setInput(content);
-        setError(err.message);
+    // Optimistic user turn; the server returns the authoritative transcript.
+    setMessages((m) => [
+      ...m,
+      {
+        role: "user",
+        content,
+        ...(sending.length
+          ? {
+              attachments: sending.map((f) => ({
+                name: f.name,
+                kind: kindOf(f),
+                mediaType: f.type,
+              })),
+            }
+          : {}),
       },
-    });
+    ]);
+    setInput("");
+    setFiles([]);
+    chat.mutate(
+      { message: content, files: sending },
+      {
+        onSuccess: (res) => setMessages(res.messages),
+        onError: (err) => {
+          // Drop the unanswered turn and hand the question + files back.
+          setMessages((m) => m.slice(0, -1));
+          setInput(content);
+          setFiles(sending);
+          setError(err.message);
+        },
+      },
+    );
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -101,7 +157,9 @@ export function RoleChat({ job }: { job: Job }) {
       <p className="text-sm text-muted-foreground">
         Chat with your recruiter/coach about this specific role — fit, positioning, interview prep,
         gaps, whether to apply. Grounded in this posting and your resume; it won't invent experience
-        you don't have.
+        you don't have. <strong className="font-medium text-foreground">Attach files</strong> (a
+        screenshot, position description, interview invite, assessment brief — image, PDF, .docx,
+        .txt, .md or .csv) and they'll be read as context for your question.
       </p>
 
       {!hasResume && (
@@ -136,6 +194,9 @@ export function RoleChat({ job }: { job: Job }) {
                 }`}
               >
                 {m.content}
+                {m.attachments && m.attachments.length > 0 && (
+                  <AttachmentChips attachments={m.attachments} />
+                )}
               </div>
             </div>
           ))}
@@ -173,7 +234,58 @@ export function RoleChat({ job }: { job: Job }) {
         </div>
       )}
 
+      {/* Files staged for the next question */}
+      {files.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {files.map((f, i) => (
+            <span
+              key={i}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2 py-1 text-xs max-w-[220px]"
+            >
+              {f.type.startsWith("image/") ? (
+                <ImageIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <FileText className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="truncate">{f.name}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${f.name}`}
+                onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                className="shrink-0 text-muted-foreground hover:text-destructive"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
+        <label
+          htmlFor="chat-files"
+          aria-label="Attach a file"
+          className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl border border-border bg-background transition-colors ${
+            disabled || chat.isPending
+              ? "opacity-50 pointer-events-none"
+              : "cursor-pointer hover:border-primary/40 hover:text-primary"
+          }`}
+        >
+          <Paperclip className="w-4 h-4" />
+          <input
+            id="chat-files"
+            type="file"
+            accept={ACCEPT}
+            multiple
+            className="hidden"
+            disabled={disabled || chat.isPending}
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? []);
+              setFiles((prev) => [...prev, ...picked].slice(0, MAX_FILES));
+              e.target.value = "";
+            }}
+          />
+        </label>
         <Textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -184,7 +296,7 @@ export function RoleChat({ job }: { job: Job }) {
         />
         <Button
           onClick={() => send(input)}
-          disabled={disabled || chat.isPending || !input.trim()}
+          disabled={disabled || chat.isPending || (!input.trim() && files.length === 0)}
           className="rounded-xl shrink-0 h-[52px] px-4"
           aria-label="Send"
         >
@@ -192,8 +304,9 @@ export function RoleChat({ job }: { job: Job }) {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground/70">
-        This chat is saved for this role — it stays here when you come back, and helps tailor your future
-        resumes, cover letters and application answers. Use “New chat” to clear it.
+        This chat and its attachments are saved for this role — they stay here when you come back, remain
+        in context for follow-up questions, and help tailor your future resumes, cover letters and
+        application answers. Use “New chat” to clear it.
       </p>
     </div>
   );

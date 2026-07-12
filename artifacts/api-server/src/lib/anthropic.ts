@@ -179,7 +179,8 @@ export async function createJsonFromImages<T = unknown>(opts: {
 
 export interface ChatMessage {
   role: "user" | "assistant";
-  content: string;
+  /** Plain text, or an array of content blocks (image/document/text). */
+  content: string | unknown[];
 }
 
 /**
@@ -198,7 +199,12 @@ export async function chatComplete(opts: {
     model: opts.model ?? "claude-opus-4-8",
     max_tokens: opts.maxTokens ?? 2048,
     system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
-    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+    // Cast: `content` may be a mixed image/document/text block array, which is
+    // valid at the API but trips the SDK's overloaded typing here.
+    messages: opts.messages.map((m) => ({
+      role: m.role,
+      content: m.content as unknown as string,
+    })),
   });
   return messageText(message);
 }
