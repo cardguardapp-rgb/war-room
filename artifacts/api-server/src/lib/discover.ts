@@ -117,6 +117,28 @@ const GENERAL_EXCLUDE = [...JOB_BOARDS, ...SOCIAL, ...LINKEDIN];
 // (and other socials) so recruiter posts and "we're hiring" shout-outs surface.
 const HIRING_EXCLUDE = [...JOB_BOARDS];
 
+// ATS / hosted-careers platforms. Companies host their OWN career postings here
+// (Salesforce, carsales, Lendi, Atlassian, etc.), so an include-only sweep of
+// these domains is a clean, high-yield way to hit company career pages directly.
+// Bare domains match subdomains (e.g. myworkdayjobs.com → acme.wd1.myworkdayjobs.com).
+// Live-tested: 20/20 results were direct single postings.
+const ATS_DOMAINS = [
+  "greenhouse.io", "lever.co", "ashbyhq.com", "workable.com", "smartrecruiters.com",
+  "myworkdayjobs.com", "bamboohr.com", "recruitee.com", "jobvite.com", "teamtailor.com",
+  "pinpointhq.com", "livehire.com", "employmenthero.com", "jobadder.com",
+];
+
+// Named recruitment agencies / search firms active in AU (exec, tech, product).
+// An include-only sweep surfaces their postings directly (Six Degrees, Hays,
+// Michael Page, Hudson, Robert Walters, …) rather than relying on ranking luck.
+const RECRUITER_DOMAINS = [
+  "sixdegreesexecutive.com.au", "hays.com.au", "roberthalf.com.au", "michaelpage.com.au",
+  "robertwalters.com.au", "talentinternational.com", "hudson.com", "au.hudson.com",
+  "davidsonwp.com", "uandu.com.au", "beaumontpeople.com.au", "peoplebank.com.au",
+  "paxus.com.au", "aquent.com", "s2m.com.au", "parityconsulting.com.au",
+  "cartermurray.com", "growthtalent.org", "balancerecruitment.com.au", "precisionsourcing.com.au",
+];
+
 /**
  * Build the query PLAN: a spread of Tavily queries that BIAS toward direct
  * postings on company career sites, ATS platforms and recruiter sites — via
@@ -139,7 +161,15 @@ export function buildQueryPlan(settings: DiscoverSettings): TavilyQuerySpec[] {
     general(`(${orTitles}) jobs Brisbane OR "Gold Coast" Queensland${extra}`);
     general(`(${orTitles}) remote Australia job${extra}`);
     general(`(${orTitles}) careers Australia ${ATS_HINT}${extra}`);
-    general(`(${orTitles}) Australia (recruitment OR recruiter OR "talent acquisition")${extra}`);
+
+    // Company career pages hosted on ATS platforms — include-only sweep (highest
+    // yield of direct single postings). This is the "look at Salesforce/Amazon/…
+    // career pages" lane, via the platforms companies actually post on.
+    specs.push({ query: `(${orTitles}) Australia${extra}`, includeDomains: ATS_DOMAINS });
+
+    // Named AU recruitment agencies — include-only sweep so their postings show
+    // up directly (Six Degrees Executive, Hays, Michael Page, Hudson, …).
+    specs.push({ query: `(${orTitles}) Australia${extra}`, includeDomains: RECRUITER_DOMAINS });
 
     // Recruiter / agency "we're hiring" shout-outs — LinkedIn ALLOWED here.
     specs.push({
@@ -154,23 +184,26 @@ export function buildQueryPlan(settings: DiscoverSettings): TavilyQuerySpec[] {
     });
   }
 
-  // Per-title sweeps to fill the budget (region + remote each).
-  for (const t of settings.roleTitles.slice(0, 3)) {
+  // Per-title sweeps to round out coverage for the top titles.
+  for (const t of settings.roleTitles.slice(0, 2)) {
     specs.push({
       query: `"${t}" job Brisbane OR "Gold Coast" OR remote Australia${extra}`,
       excludeDomains: GENERAL_EXCLUDE,
     });
   }
 
-  // De-dupe by query text and cap so a search stays quick and affordable.
+  // De-dupe by query text and cap so a search stays quick and affordable. Note:
+  // two specs may share query text but differ by domain filter (e.g. the ATS and
+  // recruiter lanes) — key on the full spec so both survive.
   const seen = new Set<string>();
   const out: TavilyQuerySpec[] = [];
   for (const s of specs) {
-    if (seen.has(s.query)) continue;
-    seen.add(s.query);
+    const key = `${s.query}|inc:${(s.includeDomains ?? []).join(",")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(s);
   }
-  return out.slice(0, 10);
+  return out.slice(0, 12);
 }
 
 /** The query texts alone (used by the non-AI smoke test). */
@@ -210,10 +243,23 @@ export function isSearchOrIndexPage(url: string): boolean {
   }
   // Explicit search / browse / results / advice path segments (not a single role).
   if (
-    /\/(search|browse|results?|job-search|jobs-search|find-jobs|advice|job-description|career-advice|skills)(\/|$)/.test(
+    /\/(search|browse|results?|job-search|jobs-search|find-jobs|find-work|advice|job-description|career-advice|skills)(\/|$)/.test(
       path,
     )
   ) {
+    return true;
+  }
+  // Recruiter marketing / reference pages, not postings (salary guides & surveys,
+  // sector/service/expertise landing pages, blogs) — common on Hays/Robert Walters/etc.
+  if (
+    /\/(salary|salaries|salary-guide|salary-survey|salary-calculator|expertise|our-services|our-expertise|sectors?|disciplines|blog|news|insights?|resources|guides?)(\/|$)/.test(
+      path,
+    )
+  ) {
+    return true;
+  }
+  // Document downloads (salary guides, brochures) are never a live posting.
+  if (/\.(pdf|docx?|pptx?|xlsx?)$/.test(path)) {
     return true;
   }
   // Aggregator "…-jobs" category slugs with no posting id (e.g. /head-of-product-jobs).

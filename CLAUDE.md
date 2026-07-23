@@ -421,10 +421,21 @@ parameters, with one-tap handoff into the tailoring pipeline.
   (capped): general/company + careers/ATS + recruiter-agency lanes (big job
   boards **and** LinkedIn excluded, so company/recruiter sites surface); a
   **recruiter "we're hiring" shout-out lane** (boards excluded but **LinkedIn
-  allowed**); and a **LinkedIn lane** (`includeDomains` LinkedIn) that catches
-  real postings (`/jobs/view/…`) and member hiring posts. `isSearchOrIndexPage`
-  drops search/category pages and LinkedIn `/in`·`/company`·`/school` profile
-  pages, but keeps `/jobs/view/` and `/posts/`. The classifier is deliberately
+  allowed**); a **LinkedIn lane** (`includeDomains` LinkedIn) that catches
+  real postings (`/jobs/view/…`) and member hiring posts; an **ATS lane**
+  (`includeDomains` `ATS_DOMAINS` — greenhouse/lever/ashby/workable/
+  smartrecruiters/workday/bamboohr/recruitee/livehire/employmenthero/…) that
+  hits company career pages directly — companies host careers on ATS, so this is
+  the "look at Salesforce/Amazon/… careers" lane done via the platforms they
+  post on (live-tested ~20/20 direct postings); and a **named-recruiter lane**
+  (`includeDomains` `RECRUITER_DOMAINS` — Six Degrees Executive, Hays, Michael
+  Page, Hudson, Robert Walters, Robert Half, Talent Int'l, u&u, …). The two
+  include-lanes share query text but differ by domain, so plan de-dup keys on
+  query **+ includeDomains** (not text alone); lane cap is 12.
+  `isSearchOrIndexPage` drops search/category pages, recruiter
+  salary-guide/expertise/blog marketing pages, document files (.pdf/.docx/…),
+  and LinkedIn `/in`·`/company`·`/school` profile pages, but keeps `/jobs/view/`
+  and `/posts/`. The classifier is deliberately
   lenient (default KEEP): it only discards clear non-postings/blogs/events and
   CLEAR seniority/location breaches — ambiguous-location AU roles, recruiter
   postings with no named employer, and LinkedIn hiring posts are kept as
