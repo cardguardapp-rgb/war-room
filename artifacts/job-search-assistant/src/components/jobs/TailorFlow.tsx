@@ -68,6 +68,7 @@ export function TailorFlow({
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<TailorResult | null>(null);
   const [answers, setAnswers] = useState<{ question: string; answer: string }[]>([]);
+  const [skipped, setSkipped] = useState<string[]>([]);
   const [qIndex, setQIndex] = useState(0);
   const [currentAnswer, setCurrentAnswer] = useState("");
   const [editText, setEditText] = useState("");
@@ -83,12 +84,50 @@ export function TailorFlow({
       onSuccess: (res) => {
         setResult(res);
         setAnswers([]);
+        setSkipped([]);
         setQIndex(0);
         setCurrentAnswer("");
         setPhase(res.clarifying_questions.length > 0 ? "questions" : "review");
       },
       onError: (err) => setError(err.message),
     });
+  };
+
+  // Run the final tailoring pass with whatever was answered + whatever was
+  // skipped. If the candidate skipped anything, we never loop them back into
+  // questions — the model uses best judgement for the skipped ones instead.
+  const runFinalize = (
+    finalAnswers: { question: string; answer: string }[],
+    skippedList: string[],
+  ) => {
+    if (!result) return;
+    setError(null);
+    finalize.mutate(
+      {
+        id: job.id,
+        data: {
+          answers: finalAnswers,
+          skipped: skippedList,
+          current_resume: result.proposed_resume,
+        },
+      },
+      {
+        onSuccess: (res) => {
+          setResult(res);
+          if (res.clarifying_questions.length > 0 && skippedList.length === 0) {
+            // A genuine new round of follow-ups (nothing was skipped) — ask them.
+            setAnswers([]);
+            setSkipped([]);
+            setQIndex(0);
+            setCurrentAnswer("");
+            setPhase("questions");
+          } else {
+            setPhase("review");
+          }
+        },
+        onError: (err) => setError(err.message),
+      },
+    );
   };
 
   const submitAnswer = () => {
@@ -111,24 +150,31 @@ export function TailorFlow({
       setQIndex(qIndex + 1);
       return;
     }
+    runFinalize(nextAnswers, skipped);
+  };
 
-    // Last question answered — run the final tailoring pass.
-    setError(null);
-    finalize.mutate(
-      { id: job.id, data: { answers: nextAnswers, current_resume: result.proposed_resume } },
-      {
-        onSuccess: (res) => {
-          setResult(res);
-          if (res.clarifying_questions.length > 0) {
-            setQIndex(0);
-            setPhase("questions");
-          } else {
-            setPhase("review");
-          }
-        },
-        onError: (err) => setError(err.message),
-      },
-    );
+  // Skip just this question and move on (finalising if it was the last).
+  const skipQuestion = () => {
+    if (!result || finalize.isPending) return;
+    const q = result.clarifying_questions[qIndex];
+    const nextSkipped = [...skipped, q.question];
+    setSkipped(nextSkipped);
+    setCurrentAnswer("");
+    if (qIndex + 1 < result.clarifying_questions.length) {
+      setQIndex(qIndex + 1);
+      return;
+    }
+    runFinalize(answers, nextSkipped);
+  };
+
+  // Skip this question and all remaining, then let the AI decide.
+  const skipRemaining = () => {
+    if (!result || finalize.isPending) return;
+    const rest = result.clarifying_questions.slice(qIndex).map((x) => x.question);
+    const nextSkipped = [...skipped, ...rest];
+    setSkipped(nextSkipped);
+    setCurrentAnswer("");
+    runFinalize(answers, nextSkipped);
   };
 
   const requestEdit = () => {
@@ -167,6 +213,7 @@ export function TailorFlow({
     setPhase("idle");
     setResult(null);
     setAnswers([]);
+    setSkipped([]);
     setQIndex(0);
     setCurrentAnswer("");
     setEditText("");
@@ -277,8 +324,10 @@ export function TailorFlow({
           </Badge>
         </div>
         <p className="text-sm text-muted-foreground">
-          The resume can't be tailored honestly without these. Your answers are saved
-          for future applications too.
+          Answering these makes the resume sharper, and your answers are saved for future
+          applications too. You can <span className="font-medium">skip</span> any you're
+          unsure of — we'll use best judgement from what's already known and never invent
+          anything.
         </p>
 
         {answers.length > 0 && (
@@ -307,7 +356,15 @@ export function TailorFlow({
             className="min-h-[90px]"
             disabled={finalize.isPending}
           />
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between gap-2">
+            <Button
+              variant="ghost"
+              onClick={skipQuestion}
+              disabled={finalize.isPending}
+              className="rounded-lg text-muted-foreground"
+            >
+              {qIndex + 1 < total ? "Skip" : "Skip & tailor"}
+            </Button>
             <Button
               onClick={submitAnswer}
               disabled={!currentAnswer.trim() || finalize.isPending}
@@ -324,6 +381,19 @@ export function TailorFlow({
               )}
             </Button>
           </div>
+          {total - qIndex > 1 && (
+            <div className="flex justify-center pt-1">
+              <Button
+                variant="link"
+                size="sm"
+                onClick={skipRemaining}
+                disabled={finalize.isPending}
+                className="text-muted-foreground h-auto"
+              >
+                Skip the rest and let AI use best judgement
+              </Button>
+            </div>
+          )}
         </div>
         {finalize.isPending && <AiProgress stages={FINALISE_STAGES} />}
         {errorBox}

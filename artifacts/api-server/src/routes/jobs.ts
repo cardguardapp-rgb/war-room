@@ -525,7 +525,7 @@ router.post("/jobs/:id/tailor/finalize", async (req, res): Promise<void> => {
   const ctx = await loadTailorContext(id, res);
   if (!ctx) return;
 
-  const { answers, current_resume } = req.body ?? {};
+  const { answers, skipped, current_resume } = req.body ?? {};
   const answerPairs: QaPair[] = Array.isArray(answers)
     ? answers
         .map((a: unknown) => {
@@ -537,6 +537,11 @@ router.post("/jobs/:id/tailor/finalize", async (req, res): Promise<void> => {
         })
         .filter((a) => a.question && a.answer)
     : [];
+  // Questions the candidate chose to skip — the model uses best judgement for
+  // these and must not re-ask them (avoids an unskippable question loop).
+  const skippedQuestions: string[] = Array.isArray(skipped)
+    ? skipped.map((q: unknown) => String(q ?? "").trim()).filter((q) => q.length > 0)
+    : [];
 
   try {
     const result = await runTailor({
@@ -546,6 +551,7 @@ router.post("/jobs/:id/tailor/finalize", async (req, res): Promise<void> => {
       extraAnswers: ctx.extraAnswers,
       coachingNotes: ctx.coachingNotes,
       answers: answerPairs,
+      skipped: skippedQuestions,
       currentResume:
         current_resume && Array.isArray(current_resume.sections)
           ? (current_resume as ResumeJson)

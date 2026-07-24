@@ -34,6 +34,8 @@ export interface TailorInput {
   extraAnswers: unknown;
   /** finalize: answers to the clarifying questions. */
   answers?: QaPair[];
+  /** finalize: questions the candidate chose to skip — use best judgement, don't re-ask. */
+  skipped?: string[];
   /** revise: the free-text edit the candidate asked for. */
   editRequest?: string;
   /** finalize/revise: the current proposed resume to refine. */
@@ -74,8 +76,17 @@ function buildUserContent(input: TailorInput): string {
         )}`,
       );
     }
+    if (input.skipped?.length) {
+      parts.push(
+        `\n\nSKIPPED QUESTIONS — the candidate chose NOT to answer these:\n${input.skipped
+          .map((q) => `- ${q}`)
+          .join(
+            "\n",
+          )}\n\nDo NOT re-ask these. Use your best judgement from the resume, extra answers and any coaching notes already provided, making the safest reasonable wording choice. As always, never invent specific figures, employers, dates, or achievements the candidate hasn't given — where a concrete fact is genuinely unknown, keep the phrasing general and truthful rather than guessing a number.`,
+      );
+    }
     parts.push(
-      `\n\nIncorporate the answers, then reword to the writing-quality standard (clean, grammatical, one idea per bullet, no run-on sentences or comma splices) and run the RECRUITER REVIEW PASS — including the final PROOFREAD step — again on this version. Do not ask the same questions again.`,
+      `\n\nProduce the final tailored resume now — this is the last pass, so return an EMPTY clarifying_questions array. Incorporate any answers, then reword to the writing-quality standard (clean, grammatical, one idea per bullet, no run-on sentences or comma splices) and run the RECRUITER REVIEW PASS — including the final PROOFREAD step — again on this version. Do not ask the same questions again; if something is still unknown, note it in the recruiter_feedback rather than as a question.`,
     );
   }
 

@@ -315,8 +315,16 @@ checks, and the JSON contract) live in `src/lib/prompts.ts`** — `TAILOR_SYSTEM
 2. If there are clarifying questions, the UI asks them one at a time.
    `POST /jobs/:id/qa` `{ question, answer }` saves each answer to **both**
    `qa_log` and `profile.extra_answers_json` (so future sessions know it).
-3. `POST /jobs/:id/tailor/finalize` `{ answers, current_resume }` — second pass
-   incorporating the answers; the recruiter review runs again.
+   **Questions are skippable** — each has a "Skip" button plus a "Skip the rest
+   and let AI use best judgement" link. Skipped questions are collected and sent
+   to finalize as `skipped[]`; the model is told not to re-ask them and to use
+   best judgement from the resume/extra answers/coaching notes (still never
+   inventing figures/employers/dates). When anything was skipped, the UI routes
+   straight to review rather than looping back into questions.
+3. `POST /jobs/:id/tailor/finalize` `{ answers, skipped, current_resume }` —
+   second pass incorporating the answers (and best-judgement for `skipped`);
+   returns an empty `clarifying_questions` array (last pass) and the recruiter
+   review runs again.
 4. `POST /jobs/:id/tailor/revise` `{ proposed_resume, edit_request }` — apply a
    free-text edit ("make the second MYOB bullet shorter"); review runs again.
 5. `POST /jobs/:id/tailor/approve` `{ proposed_resume }` — saves a `documents`

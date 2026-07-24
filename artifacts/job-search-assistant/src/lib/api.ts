@@ -423,7 +423,7 @@ export const api = {
     tailorStart: (id: number) => fetchApi<TailorResult>(`/jobs/${id}/tailor`, { method: "POST" }),
     recordQa: (id: number, data: { question: string; answer: string }) =>
       fetchApi<{ extra_answers: unknown[] }>(`/jobs/${id}/qa`, { method: "POST", body: JSON.stringify(data) }),
-    tailorFinalize: (id: number, data: { answers: { question: string; answer: string }[]; current_resume: ResumeJson }) =>
+    tailorFinalize: (id: number, data: { answers: { question: string; answer: string }[]; skipped?: string[]; current_resume: ResumeJson }) =>
       fetchApi<TailorResult>(`/jobs/${id}/tailor/finalize`, { method: "POST", body: JSON.stringify(data) }),
     tailorRevise: (id: number, data: { proposed_resume: ResumeJson; edit_request: string }) =>
       fetchApi<TailorResult>(`/jobs/${id}/tailor/revise`, { method: "POST", body: JSON.stringify(data) }),
