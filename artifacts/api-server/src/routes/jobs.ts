@@ -137,7 +137,7 @@ router.get("/jobs", async (_req, res): Promise<void> => {
 });
 
 router.post("/jobs", async (req, res): Promise<void> => {
-  const { title, company, location, work_arrangement, source_url, posting_text, assessment } =
+  const { title, company, location, work_arrangement, source_url, posting_text, assessment, brief } =
     req.body ?? {};
 
   if (typeof title !== "string" || title.trim().length === 0) {
@@ -173,10 +173,12 @@ router.post("/jobs", async (req, res): Promise<void> => {
       type: "assessment",
       contentJson: normalisedAssessment,
     });
-  } else if (row.postingText && row.postingText.trim().length > 0) {
+  } else if (!brief && row.postingText && row.postingText.trim().length > 0) {
     // No assessment supplied (e.g. saved from Discover, or added without a
     // review step) — auto-generate one from the posting so the fit score shows
     // immediately in the list. Never block job creation if the AI call fails.
+    // Skipped for a "brief" (recruiter high-level info, not a real posting), where
+    // a fit score would be misleading.
     try {
       const criteria = await loadCriteria();
       const meta = await extractFromText(row.postingText, criteria);

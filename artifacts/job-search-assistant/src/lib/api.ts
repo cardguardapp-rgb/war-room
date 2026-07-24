@@ -403,7 +403,7 @@ export const api = {
       files.forEach((f) => fd.append("images", f));
       return fetchMultipart<ExtractResponse>("/jobs/extract-image", fd);
     },
-    create: (data: { title: string; company?: string; location?: string; work_arrangement?: WorkArrangement; source_url?: string; posting_text?: string; assessment?: JobAssessment }) =>
+    create: (data: { title: string; company?: string; location?: string; work_arrangement?: WorkArrangement; source_url?: string; posting_text?: string; brief?: boolean; assessment?: JobAssessment }) =>
       fetchApi<Job>("/jobs", { method: "POST", body: JSON.stringify(data) }),
     update: (id: number, data: Partial<Pick<Job, 'title' | 'company' | 'location' | 'work_arrangement' | 'source_url' | 'posting_text' | 'status'>>) =>
       fetchApi<Job>(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
