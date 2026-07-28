@@ -243,6 +243,8 @@ export interface DiscoverSettings {
   remoteRule: string;
   exclusions: string[];
   extraKeywords: string;
+  /** Career/recruiter listing pages rendered + scanned directly (JS-heavy sites). */
+  sources: string[];
 }
 
 export interface DiscoverResult {

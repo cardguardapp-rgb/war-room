@@ -22,6 +22,7 @@ const DEFAULTS: DiscoverSettings = {
     "Roles requiring relocation",
   ],
   extraKeywords: "",
+  sources: ["https://blackroc.co/jobs"],
 };
 
 function ListEditor({
@@ -100,6 +101,9 @@ export function SettingsEditor({
     officeRegion: s.officeRegion.trim(),
     remoteRule: s.remoteRule.trim(),
     extraKeywords: s.extraKeywords.trim(),
+    sources: s.sources
+      .map((t) => t.trim())
+      .filter((t) => /^https?:\/\//i.test(t)),
   });
 
   return (
@@ -150,6 +154,16 @@ export function SettingsEditor({
           className="h-10"
         />
         <p className="text-xs text-muted-foreground">Appended to every search query.</p>
+      </div>
+
+      <div className="rounded-xl border border-border bg-muted/20 p-3.5">
+        <ListEditor
+          label="Pages to scan"
+          hint="Career or recruiter listing pages to open and read directly — including JS-heavy sites (e.g. blackroc.co/jobs) that web search can't see inside. We render each page, pull out the individual roles, and screen them like any other result. Paste the page that lists the jobs, not a single posting."
+          items={draft.sources}
+          placeholder="https://company.com/careers"
+          onChange={(sources) => set({ sources })}
+        />
       </div>
 
       <div className="flex items-center justify-between gap-2 pt-2 border-t border-border">

@@ -470,6 +470,26 @@ parameters, with one-tap handoff into the tailoring pipeline.
   non-matches are discarded; **`unsure` results are kept and flagged**, never
   hidden. A final company+title de-dupe runs across batches. Response includes a
   `counts` object and an indicative-coverage `note`.
+- **Pages to scan (headless render)** — web search (Tavily) only sees pages its
+  crawler indexed; JS-rendered SPA career/recruiter sites (e.g. `blackroc.co/jobs`,
+  whose raw HTML is a ~6KB empty shell with no postings in the sitemap or a public
+  feed) are invisible to it. So `discover_settings.sources[]` holds listing-page
+  URLs the user adds; `runDiscover` renders each in **headless Chromium**
+  (`lib/pageRender.ts` — `resolveChromium()` globs `/nix/store/*chromium*/bin/chromium`,
+  `renderPageDom()` spawns `--headless=new --dump-dom --virtual-time-budget=9000`)
+  and harvests the individual posting links + card text (`lib/pageScan.ts`
+  `harvestPostings()` — same-host links under a `/jobs|careers|vacancies|…/<slug>`
+  section, nav/category slugs filtered, cap 25/source). Harvested postings are
+  shaped like Tavily hits and screened through the **same classifier**; they run
+  **in parallel** with the web search. Best-effort: a source that won't render just
+  yields nothing. `sources` defaults to `["https://blackroc.co/jobs"]` and is
+  editable in the Discover settings ("Pages to scan"); an explicit empty array is
+  respected (only an absent key re-seeds the starter). Search `counts` gains
+  `harvested`. **The same headless render is a fallback in `extractFromUrl`**
+  (`jobExtract.ts` `renderAndClean`): when a plain fetch returns a blocked/empty
+  SPA shell, it renders then re-runs Readability — so "Tailor/Save" works on these
+  JS-rendered postings too. Needs Chromium on the host (present on Replit; override
+  with `CHROMIUM_PATH`). Rendering is slow cold (~15–40s/page).
 - **Actions** (frontend): "Tailor for this role" seeds `AddJobDialog`
   (`JobSeed`) which auto-runs the Phase-3 extraction (paste fallback on a blocked
   fetch) then navigates to the Job Detail tailoring flow. "Save" fetches the

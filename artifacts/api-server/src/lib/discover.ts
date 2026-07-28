@@ -4,6 +4,7 @@
 import { createJson } from "./anthropic";
 import { DISCOVER_CLASSIFY_SYSTEM, DISCOVER_MODEL } from "./prompts";
 import { tavilySearchSpecs, type TavilyQuerySpec, type TavilyResult } from "./tavily";
+import { harvestPostings } from "./pageScan";
 
 export type WorkArrangement = "office" | "hybrid" | "remote" | "unknown";
 export type MatchVerdict = "yes" | "no" | "unsure";
@@ -19,6 +20,13 @@ export interface DiscoverSettings {
   exclusions: string[];
   /** Optional extra keywords appended to every query. */
   extraKeywords: string;
+  /**
+   * Career / recruiter listing pages to render + scan directly. Fixes the class
+   * of site (JS-rendered SPAs like blackroc.co/jobs) whose postings never appear
+   * in web-search indexes. Each is rendered in headless Chromium and its posting
+   * links are harvested and screened alongside the search results.
+   */
+  sources: string[];
 }
 
 export interface DiscoverResult {
@@ -56,7 +64,26 @@ export const DEFAULT_DISCOVER_SETTINGS: DiscoverSettings = {
     "Roles requiring relocation",
   ],
   extraKeywords: "",
+  sources: ["https://blackroc.co/jobs"],
 };
+
+/** Validate the scan-sources list: http(s) URLs only, capped. Distinct from the
+ * other fields — an explicit empty array is respected (the user cleared it);
+ * only an ABSENT key falls back to the starter sources. */
+function normaliseSources(raw: unknown): string[] {
+  if (raw === undefined) return DEFAULT_DISCOVER_SETTINGS.sources;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    const s = typeof v === "string" ? v.trim() : "";
+    if (!/^https?:\/\//i.test(s) || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
 
 function asStringArray(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback;
@@ -82,6 +109,7 @@ export function normaliseSettings(raw: unknown): DiscoverSettings {
     exclusions: asStringArray(o["exclusions"], DEFAULT_DISCOVER_SETTINGS.exclusions).slice(0, 12),
     extraKeywords:
       typeof o["extraKeywords"] === "string" ? (o["extraKeywords"] as string).trim() : "",
+    sources: normaliseSources(o["sources"]),
   };
 }
 
@@ -397,6 +425,28 @@ export interface DiscoverRun {
   screenedCount: number;
   /** Raw hits dropped for being search / category / index pages (not postings). */
   droppedNonPostings: number;
+  /** Postings harvested directly from the user's scanned career/recruiter pages. */
+  harvestedCount: number;
+}
+
+/**
+ * Render each "scan source" page in headless Chromium and harvest its posting
+ * links, shaped like Tavily results so they screen through the same pipeline.
+ * Best-effort and parallel — a source that fails to render just yields nothing.
+ */
+async function scanSources(sources: string[]): Promise<TavilyResult[]> {
+  if (!sources.length) return [];
+  const settled = await Promise.allSettled(
+    sources.slice(0, 6).map((s) => harvestPostings(s, { cap: 25, timeoutMs: 30000 })),
+  );
+  const out: TavilyResult[] = [];
+  for (const r of settled) {
+    if (r.status !== "fulfilled") continue;
+    for (const p of r.value) {
+      out.push({ title: p.title, url: p.url, content: p.content, score: 0.5 });
+    }
+  }
+  return out;
 }
 
 /**
@@ -409,19 +459,27 @@ export async function runDiscover(
   isDismissed: (url: string) => boolean,
 ): Promise<DiscoverRun> {
   const plan = buildQueryPlan(settings);
-  // Bias to the last month at the source, and a higher per-query cap since the
-  // posting filter + aggregator exclusion drop a lot of noise.
-  const raw = await tavilySearchSpecs(plan, {
-    maxResults: 8,
-    searchDepth: "advanced",
-    timeRange: "month",
-  });
+  // Run the web search and the direct page scans concurrently.
+  const [raw, harvested] = await Promise.all([
+    // Bias to the last month at the source, and a higher per-query cap since the
+    // posting filter + aggregator exclusion drop a lot of noise.
+    tavilySearchSpecs(plan, {
+      maxResults: 8,
+      searchDepth: "advanced",
+      timeRange: "month",
+    }),
+    scanSources(settings.sources),
+  ]);
 
   const deduped = dedupeRaw(raw);
   // Keep only URLs that look like a specific posting, not a search/index page.
   const postings = deduped.filter((r) => !isSearchOrIndexPage(r.url));
   const droppedNonPostings = deduped.length - postings.length;
-  const candidates = postings.filter((r) => !isDismissed(r.url));
+
+  // Merge in the harvested postings (already vetted as individual roles by the
+  // page scanner, so they skip the search/index filter) and de-dupe across both.
+  const merged = dedupeRaw([...postings, ...harvested]);
+  const candidates = merged.filter((r) => !isDismissed(r.url));
 
   const BATCH = 8;
   const classified: DiscoverResult[] = [];
@@ -432,5 +490,11 @@ export async function runDiscover(
   }
 
   const results = dedupeClassified(classified).filter((r) => !isDismissed(r.url));
-  return { results, rawCount: raw.length, screenedCount: candidates.length, droppedNonPostings };
+  return {
+    results,
+    rawCount: raw.length + harvested.length,
+    screenedCount: candidates.length,
+    droppedNonPostings,
+    harvestedCount: harvested.length,
+  };
 }

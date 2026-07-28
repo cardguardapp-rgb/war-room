@@ -77,6 +77,7 @@ router.post("/discover/search", async (req, res): Promise<void> => {
         raw: run.rawCount,
         dropped_non_postings: run.droppedNonPostings,
         screened: run.screenedCount,
+        harvested: run.harvestedCount,
         kept: run.results.length,
       },
       note: "Results target recent direct postings on company career sites, ATS platforms and recruiter sites — big job boards (Seek, Indeed, LinkedIn, jobsora, etc.) and their search/category pages are excluded, and search is biased to the last month. Posting dates aren't always published, so some may still be older than a month — always open the posting to confirm the date and details.",

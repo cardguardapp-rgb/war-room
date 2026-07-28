@@ -2,6 +2,7 @@ import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { createJson, createJsonFromImages, type ImageInput } from "./anthropic";
 import { EXTRACT_MODEL, JOB_EXTRACTION_SYSTEM, JOB_IMAGE_EXTRACTION_SYSTEM } from "./prompts";
+import { renderPageDom } from "./pageRender";
 
 export type WorkArrangement = "office" | "hybrid" | "remote" | "unknown";
 
@@ -78,30 +79,44 @@ export async function fetchAndClean(url: string): Promise<FetchResult> {
   }
 
   const html = await res.text();
-  let text = "";
-  try {
-    const dom = new JSDOM(html, { url });
-    const article = new Readability(dom.window.document).parse();
-    text = (article?.textContent ?? "").trim();
-    if (!text) {
-      text = (dom.window.document.body?.textContent ?? "").trim();
-    }
-  } catch {
-    return { ok: false, reason: "Could not parse the page content." };
-  }
-
-  text = text
-    .replace(/\r/g, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  if (text.length < 200) {
+  const text = readableText(html, url);
+  if (!text || text.length < 200) {
     return {
       ok: false,
       reason:
         "The page didn't contain a readable posting — it may be behind a login or bot wall (this is common on LinkedIn).",
     };
+  }
+  return { ok: true, text };
+}
+
+/** Strip nav/ads and return the main readable text; "" if nothing usable. */
+function readableText(html: string, url: string): string {
+  try {
+    const dom = new JSDOM(html, { url });
+    const article = new Readability(dom.window.document).parse();
+    let text = (article?.textContent ?? "").trim();
+    if (!text) text = (dom.window.document.body?.textContent ?? "").trim();
+    return text
+      .replace(/\r/g, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Fallback for client-rendered (SPA) postings a plain fetch can't read: render
+ * the page in headless Chromium, then clean the resulting DOM. Best-effort.
+ */
+async function renderAndClean(url: string): Promise<FetchResult> {
+  const rendered = await renderPageDom(url, { timeoutMs: 30000 });
+  if (!rendered.ok) return { ok: false, reason: rendered.reason };
+  const text = readableText(rendered.html, url);
+  if (!text || text.length < 200) {
+    return { ok: false, reason: "The rendered page still had no readable posting." };
   }
   return { ok: true, text };
 }
@@ -239,8 +254,13 @@ export async function extractFromUrl(
   | { ok: true; data: ExtractedJob & { source_url: string } }
   | { ok: false; reason: string }
 > {
-  const fetched = await fetchAndClean(url);
-  if (!fetched.ok) return { ok: false, reason: fetched.reason };
+  // Plain fetch first; if it's blocked or an empty SPA shell, render it.
+  let fetched = await fetchAndClean(url);
+  if (!fetched.ok) {
+    const rendered = await renderAndClean(url);
+    if (rendered.ok) fetched = rendered;
+    else return { ok: false, reason: fetched.reason };
+  }
   const meta = await extractMeta(fetched.text, criteria);
   return {
     ok: true,
