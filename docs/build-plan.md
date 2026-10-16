@@ -9,7 +9,7 @@ employers.
 
 ---
 
-## [ ] M0: Run locally on Windows
+## [x] M0: Run locally on Windows
 
 **Scope**
 - Load `.env` in development only, for both the API server and
