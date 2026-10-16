@@ -1,13 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLogin, useAuthStatus } from "@/hooks/use-api";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
+import { Input } from "@/components/ui/input";
+import { ApiError } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
+const PIN_PATTERN = /^\d{6,8}$/;
+
+function formatWait(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 export default function Login() {
   const [pin, setPin] = useState("");
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const inputRef = useRef<HTMLInputElement>(null);
   const [, setLocation] = useLocation();
   const login = useLogin();
   const { data: auth, isLoading: authLoading } = useAuthStatus();
@@ -19,24 +31,52 @@ export default function Login() {
     }
   }, [auth, setLocation]);
 
+  const waitSeconds = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
+  const locked = waitSeconds > 0;
+
+  // Tick the countdown while locked, then hand focus back to the field.
+  useEffect(() => {
+    if (lockedUntil <= Date.now()) return;
+    const timer = window.setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= lockedUntil) {
+        window.clearInterval(timer);
+        inputRef.current?.focus();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [lockedUntil]);
+
   if (authLoading || auth?.authenticated) {
     return null;
   }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pin.length !== 4) return;
+    if (!PIN_PATTERN.test(pin) || locked) return;
 
     login.mutate(pin, {
       onSuccess: () => {
         setLocation("/jobs");
       },
-      onError: () => {
-        toast.error("Incorrect PIN", {
-          description: "Please try again."
-        });
+      onError: (err) => {
         setPin("");
-      }
+        if (err instanceof ApiError && err.status === 429) {
+          const seconds = Number(err.data.retry_after_seconds) || 30;
+          const t = Date.now();
+          setNow(t);
+          setLockedUntil(t + seconds * 1000);
+          toast.error("Too many incorrect PINs");
+          return;
+        }
+        if (err instanceof ApiError && err.status === 401) {
+          toast.error("Incorrect PIN", { description: "Please try again." });
+        } else {
+          toast.error(err.message);
+        }
+        inputRef.current?.focus();
+      },
     });
   };
 
@@ -60,32 +100,30 @@ export default function Login() {
         <p className="text-muted-foreground text-center mb-10">Enter your PIN to access your war room.</p>
 
         <form onSubmit={handleSubmit} className="w-full flex flex-col items-center gap-8">
-          <InputOTP
-            maxLength={4}
+          <Input
+            ref={inputRef}
+            type="password"
+            inputMode="numeric"
+            autoComplete="current-password"
+            aria-label="PIN"
+            maxLength={8}
             value={pin}
-            onChange={setPin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
             autoFocus
-            disabled={login.isPending}
-          >
-            <InputOTPGroup className="gap-4">
-              {[0, 1, 2, 3].map((i) => (
-                <InputOTPSlot
-                  key={i}
-                  index={i}
-                  className="w-14 h-16 text-2xl border-2 border-border rounded-xl bg-card shadow-sm data-[active=true]:border-primary data-[active=true]:ring-4 data-[active=true]:ring-primary/20 transition-all"
-                />
-              ))}
-            </InputOTPGroup>
-          </InputOTP>
+            disabled={login.isPending || locked}
+            className="h-16 md:h-16 text-center text-3xl md:text-3xl tracking-[0.5em] border-2 border-border rounded-xl bg-card shadow-sm focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/20"
+          />
 
-          <Button 
-            type="submit" 
-            size="lg" 
+          <Button
+            type="submit"
+            size="lg"
             className="w-full h-14 text-lg rounded-xl shadow-md"
-            disabled={pin.length !== 4 || login.isPending}
+            disabled={!PIN_PATTERN.test(pin) || login.isPending || locked}
           >
             {login.isPending ? (
               <Loader2 className="w-5 h-5 animate-spin" />
+            ) : locked ? (
+              `Try again in ${formatWait(waitSeconds)}`
             ) : (
               "Enter"
             )}

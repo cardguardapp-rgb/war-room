@@ -4,6 +4,13 @@ import "./index.css";
 
 createRoot(document.getElementById("root")!).render(<App />);
 
+// A page restored from the back/forward cache (e.g. Back after logging out)
+// would show the old screens without asking the server; reload so the session
+// is checked again.
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) window.location.reload();
+});
+
 // Register the PWA service worker (installability + offline fallback page).
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {

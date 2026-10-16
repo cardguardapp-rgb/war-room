@@ -3,7 +3,11 @@ import { QueryClient } from "@tanstack/react-query";
 const BASE_PATH = "/api";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public data: Record<string, unknown> = {},
+  ) {
     super(message);
   }
 }
@@ -36,19 +40,24 @@ async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> 
 
   if (!response.ok) {
     let message = "An error occurred";
+    let data: Record<string, unknown> = {};
     try {
-      const data = await response.json();
-      message = data.error || message;
+      data = await response.json();
+      message = (data.error as string) || message;
     } catch (e) {
       // Ignore
     }
 
-    // Redirect to login on 401
-    if (response.status === 401 && window.location.pathname !== "/") {
+    // Redirect to login on 401 (a wrong PIN on /auth/login is not a lost session)
+    if (
+      response.status === 401 &&
+      !path.startsWith("/auth/") &&
+      window.location.pathname !== "/"
+    ) {
       window.location.href = "/";
     }
 
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, data);
   }
 
   // 204 No Content

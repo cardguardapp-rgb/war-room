@@ -37,7 +37,7 @@ export function useLogout() {
     mutationFn: () => api.auth.logout(),
     onSuccess: () => {
       queryClient.clear();
-      window.location.href = "/";
+      window.location.replace("/");
     },
   });
 }

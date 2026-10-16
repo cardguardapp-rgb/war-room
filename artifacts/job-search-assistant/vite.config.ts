@@ -34,6 +34,15 @@ const onReplit = process.env.REPL_ID !== undefined;
 const devHttps = process.env.DEV_HTTPS === "1";
 const apiPort = process.env.API_PORT;
 
+// Security headers for the HTML/JS the dev and preview servers serve (the API
+// sets its own). No CSP here: Vite's dev client relies on inline scripts.
+const securityHeaders = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "SAMEORIGIN",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "camera=(), geolocation=(), payment=(), usb=(), microphone=(self)",
+};
+
 export default defineConfig({
   base: basePath,
   plugins: [
@@ -71,6 +80,7 @@ export default defineConfig({
     strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,
+    headers: securityHeaders,
     fs: {
       strict: true,
     },
@@ -86,5 +96,6 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    headers: securityHeaders,
   },
 });

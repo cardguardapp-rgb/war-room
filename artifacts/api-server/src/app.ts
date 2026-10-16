@@ -4,8 +4,10 @@ import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { originGuard, securityHeaders } from "./lib/httpSecurity";
 
 const app: Express = express();
+app.disable("x-powered-by");
 
 app.use(
   pinoHttp({
@@ -26,6 +28,9 @@ app.use(
     },
   }),
 );
+app.use(securityHeaders);
+// originGuard refuses foreign origins, so cors() only ever reflects allowed ones.
+app.use(originGuard);
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 // Reviewed resume JSON + style map can exceed Express's 100kb default.

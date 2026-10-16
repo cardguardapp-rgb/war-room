@@ -87,7 +87,7 @@ The plan of work lives in `docs/build-plan.md` (milestones M0–M8).
   health check uses them (`HealthCheckResponse`); **there are no generated hooks
   in use**. A new endpoint is added by hand on both the Express route and
   `api.ts`.
-- **Auth:** one PIN (`APP_PIN`). See "Auth (current)".
+- **Auth:** one PIN (`APP_PIN`). See "Auth and HTTP security (M1)".
 - `artifacts/mockup-sandbox` is Replit's design canvas scaffold, not part of the
   app.
 - `.agents/memory/` holds notes from the Replit era; the useful ones are folded
@@ -159,8 +159,9 @@ Names only — values live in `.env` (local) and Replit Secrets (production).
 |---|---|---|
 | `DATABASE_URL` | `lib/db`, drizzle config | Locally: Neon project `warroom-dev` **only** |
 | `DEV_DATABASE_HOST` | `lib/db/src/env.ts` | Local only: the warroom-dev endpoint host; must match `DATABASE_URL`'s host or nothing connects |
-| `APP_PIN` | `pinAuth.ts` | The PIN (login screen currently takes exactly 4 digits) |
-| `SESSION_SECRET` | `pinAuth.ts` | Signs the session token |
+| `APP_PIN` | `pinAuth.ts` | The PIN, **6–8 digits** (the login screen and `/auth/login` reject anything else) |
+| `SESSION_SECRET` | `pinAuth.ts` | Signs session tokens; ≥32 characters. Changing it logs out every device |
+| `REPLIT_DOMAINS`, `REPLIT_DEV_DOMAIN` | `httpSecurity.ts` | Set by Replit; added to the CORS allowlist |
 | `ANTHROPIC_API_KEY` | `anthropic.ts` | Missing → AI endpoints return 503; the rest works |
 | `TAVILY_API_KEY` | `tavily.ts` | Missing → `POST /discover/search` returns 503 |
 | `PRIVATE_OBJECT_DIR` | `objectStore.ts` | `/<bucket>/<dir>`; Replit provisions it (with `PUBLIC_OBJECT_SEARCH_PATHS`, `DEFAULT_OBJECT_STORAGE_BUCKET_ID`, which the code doesn't read) |
@@ -179,8 +180,10 @@ artifacts/api-server/
   build.mjs                 # esbuild bundle → dist/index.mjs
   src/
     index.ts                # HTTP server bootstrap (PORT required)
-    app.ts                  # pino-http, cors, cookie-parser, json 2mb, mounts /api
+    app.ts                  # pino-http, security headers, origin guard + cors, cookie-parser, json 2mb, mounts /api
     lib/
+      httpSecurity.ts       # originGuard (CORS allowlist, 403 otherwise) + securityHeaders
+      loginLockout.ts       # global wrong-PIN lockout, state in object storage
       db.ts                 # re-exports @workspace/db client + tables; ensureProfileRow()
       objectStore.ts        # Replit Object Storage helper (sidecar credentials)
       logger.ts             # pino (use req.log / logger, never console.log)
@@ -203,7 +206,7 @@ artifacts/api-server/
       pageRender.ts         # headless Chromium --dump-dom
       pageScan.ts           # harvest posting links from rendered listing pages
       siteBuild.ts          # personal-website static site + preview builder
-    middlewares/pinAuth.ts  # PIN check, session token, requirePin
+    middlewares/pinAuth.ts  # PIN check, timestamped session token (30-day expiry), requirePin
     routes/
       index.ts              # health, auth (public) → requirePin → everything else
       health.ts             # GET /healthz
@@ -397,7 +400,7 @@ checks and the JSON contract), `COVER_LETTER_SYSTEM`, `APP_QUESTIONS_SYSTEM`,
 Navigation: **bottom tab bar on mobile, sidebar on desktop** — an explicit
 product requirement; don't replace it with a hamburger menu.
 
-- **Login** — PIN entry (currently exactly 4 digits).
+- **Login** — PIN entry (6–8 digits, masked; lockout countdown).
 - **Profile** — upload/replace the base resume; structured review screen
   (sections editable inline, `kind` reassignable, unclassified content flagged).
   **Everything is reorderable** with up/down arrows — sections, roles, education
@@ -568,18 +571,50 @@ table: `profile`, `jobs`, `documents`, `qa_log`, `discover_settings`,
 resume and every cached docx/pdf. **Not included:** chat attachment objects and
 the website config (`website/config.json`).
 
-## Auth (current — M1 changes this)
+## Auth and HTTP security (M1)
 
-- `POST /auth/login` `{ pin }` compares against `APP_PIN` with
-  `timingSafeEqual`; no attempt limit.
-- The session cookie `jsa_session` is `HMAC-SHA256(SESSION_SECRET, APP_PIN)` —
-  the **same static value for every login**, httpOnly, `sameSite: lax`, `secure`
-  in production, 30-day `maxAge`. It carries no issue time, so it never expires
-  server-side, and logout only clears the cookie on that device. Changing
-  `APP_PIN` or `SESSION_SECRET` invalidates every session.
+- **PIN:** `POST /auth/login` `{ pin }` accepts only `^\d{6,8}$` (else 400,
+  not counted as a failure) and compares SHA-256 digests with `timingSafeEqual`.
+  At startup the server logs an error if `APP_PIN` isn't 6–8 digits or
+  `SESSION_SECRET` is shorter than 32 characters (`authConfigProblems`).
+- **Lockout** (`lib/loginLockout.ts`): one **global** counter (single user, so
+  not per IP). Wrong PINs 1–4 → 401; the 5th locks for 30s, and each further
+  wrong PIN doubles the wait (60s, 2m, 4m … capped at 1h). While locked every
+  attempt, even the right PIN, gets **429** `{ error, retry_after_seconds }` +
+  `Retry-After`, and isn't checked. The right PIN resets it; failures older
+  than 24h are forgotten. State is JSON in object storage at
+  `auth/login-lockout.json` (shared by autoscale instances, survives restarts;
+  falls back to memory if storage fails). Locally that's
+  `.local-storage/auth/login-lockout.json` — delete it to clear a lock.
+- **Sessions:** cookie `jsa_session` = `<issuedAtMs>.<HMAC-SHA256(SESSION_SECRET,
+  "v1|issuedAt|APP_PIN")>`; httpOnly, `sameSite: lax`, `secure` in production,
+  `path: /`, 30-day `maxAge`. The server rejects tokens 30+ days old
+  (`SESSION_TTL_MS`), from the future (>60s skew), or with a bad signature.
+  Changing `SESSION_SECRET` **or** `APP_PIN` invalidates every session on every
+  device. Logout clears the cookie (same options); there is no server-side
+  revocation list, so to cut off a copied cookie, rotate `SESSION_SECRET`.
 - `requirePin` guards everything except `/api/healthz` and `/api/auth/*`.
-- CORS is currently `origin: true, credentials: true` (reflects any origin). No
-  security headers.
+- **Client:** `fetchApi` redirects to `/` on a 401 except for `/auth/*` calls
+  (a wrong PIN isn't a lost session). Logout does `location.replace("/")`, and
+  `main.tsx` reloads any page restored from the back/forward cache so Back after
+  logout can't show stale screens. The login screen is a masked numeric field
+  (6–8 digits; an 8-box OTP row doesn't fit 368px) with a countdown on 429.
+- **CORS** (`lib/httpSecurity.ts` `originGuard`, before `cors()`): a request
+  with an `Origin` is allowed only if it's the request's own host
+  (`x-forwarded-host` or `host`), a `REPLIT_DOMAINS`/`REPLIT_DEV_DOMAIN` origin,
+  or — outside production — port 5175 on localhost or a private LAN IP.
+  Anything else (including `null`) gets **403** before reaching a route.
+  Requests without `Origin` (same-origin GETs, curl) pass.
+- **Security headers** (`securityHeaders`) on every API response: nosniff,
+  `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, COOP/CORP
+  same-origin, `Permissions-Policy` (microphone allowed for self — M4 needs
+  it), `X-Robots-Tag: noindex`, `Cache-Control: no-store`, CSP
+  `default-src 'none'; frame-ancestors 'self'` (the website preview, which is
+  framed by the app, gets a CSP allowing its inline styles), HSTS in
+  production. `x-powered-by` is off. The Vite dev/preview servers add the
+  non-CSP headers to the HTML. **The production HTML/JS is served by Replit's
+  static hosting, which this repo doesn't set headers for** — only `/api`
+  responses carry them there.
 
 ## PWA, mobile and resilience
 
@@ -605,6 +640,8 @@ the website config (`website/config.json`).
 ## Smoke tests
 
 Run from the repo root with `pnpm --filter @workspace/api-server exec tsx test/<file>`:
+- `authTest.ts` — session expiry/tampering/rotation, lockout schedule, CORS
+  origin rules (no keys, no DB; sets its own throwaway PIN and secret).
 - `parseFixture.ts` — resume parser (no keys, no DB).
 - `docTest.ts` — docx/pdf generation.
 - `fetchTest.ts` — job page fetch + clean (network).
