@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-/** The local development database. Locally, nothing else may be used. */
-export const DEV_DATABASE_NAME = "warroom-dev";
-
 /** True on Replit (workspace or deployment), where Replit Secrets supply the env. */
 export function isReplit(): boolean {
   return Boolean(process.env["REPL_ID"] || process.env["REPLIT_DEPLOYMENT"]);
@@ -25,14 +22,24 @@ export function findRepoRoot(start: string = process.cwd()): string | null {
   }
 }
 
-/** The database name in a Postgres connection string, or null if it can't be read. */
-export function databaseNameFromUrl(url: string): string | null {
-  try {
-    const name = decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));
-    return name || null;
-  } catch {
-    return null;
+/**
+ * The Neon endpoint a host points at, for comparison: lower-cased, port
+ * dropped, and "-pooler" removed from the first label so the pooled and direct
+ * hosts of one endpoint match. Accepts a bare host or a full connection string.
+ */
+export function normaliseDbHost(value: string): string | null {
+  let host = value.trim();
+  if (host.includes("://")) {
+    try {
+      host = new URL(host).hostname;
+    } catch {
+      return null;
+    }
   }
+  host = host.split("/")[0]!.split(":")[0]!.toLowerCase();
+  if (!host) return null;
+  const [first, ...rest] = host.split(".");
+  return [first!.replace(/-pooler$/, ""), ...rest].join(".");
 }
 
 let loaded = false;
@@ -52,15 +59,24 @@ export function loadLocalEnv(): void {
 }
 
 /**
- * Locally, refuse any database other than warroom-dev, so nothing run on the
- * laptop (server, smoke tests, drizzle-kit) can touch the production database.
+ * Locally, refuse any database except the warroom-dev Neon endpoint named by
+ * DEV_DATABASE_HOST, so nothing run on the laptop (server, smoke tests,
+ * drizzle-kit, backup import) can touch the production database. Database
+ * names can't tell them apart (both are Neon's default "neondb"); the endpoint
+ * host can. Missing DEV_DATABASE_HOST also refuses.
  */
 export function assertLocalDatabase(url: string | undefined): void {
   if (!isLocalDev() || !url) return;
-  const name = databaseNameFromUrl(url);
-  if (name !== DEV_DATABASE_NAME) {
+  const expected = normaliseDbHost(process.env["DEV_DATABASE_HOST"] ?? "");
+  if (!expected) {
     throw new Error(
-      `Local development only uses the "${DEV_DATABASE_NAME}" database, but DATABASE_URL points at "${name ?? "unknown"}". Fix DATABASE_URL in .env.`,
+      "DEV_DATABASE_HOST is not set in .env. Locally, the database host must be named there before anything connects.",
+    );
+  }
+  const actual = normaliseDbHost(url);
+  if (actual !== expected) {
+    throw new Error(
+      `DATABASE_URL points at host "${actual ?? "unknown"}", not the warroom-dev host in DEV_DATABASE_HOST. Refusing to connect.`,
     );
   }
 }

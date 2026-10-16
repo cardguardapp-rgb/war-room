@@ -126,9 +126,13 @@ The plan of work lives in `docs/build-plan.md` (milestones M0–M8).
   not on Replit and `NODE_ENV !== "production"`**; variables already set win.
   The API imports `@workspace/db/env` as the **first import** of `index.ts`;
   `lib/db/src/index.ts` and `drizzle.config.ts` load it too.
-- **DB guard:** locally, `assertLocalDatabase` refuses any `DATABASE_URL` whose
-  database name isn't `warroom-dev` (server, smoke tests, drizzle-kit). A fresh
-  warroom-dev gets its tables from `pnpm --filter @workspace/db push` (guarded).
+- **DB guard:** locally, `assertLocalDatabase` refuses to connect unless the
+  host in `DATABASE_URL` matches `DEV_DATABASE_HOST` (server, smoke tests,
+  drizzle-kit, import). A missing `DEV_DATABASE_HOST` also refuses. Hosts are
+  compared lower-cased, without the port and without Neon's `-pooler` suffix.
+  The database name can't be used: warroom-dev is the Neon *project*, and both
+  dev and production databases are called `neondb`. A fresh warroom-dev gets
+  its tables from `pnpm --filter @workspace/db push` (guarded).
 - `pnpm run dev:phone` (`scripts/dev-phone.mjs`): API on **8090** (its pnpm `dev`
   script), Vite on **5175** over self-signed https with `/api` proxied to 8090,
   then prints `War Room dev ready` plus the laptop and LAN URLs. Ctrl+C stops
@@ -136,7 +140,7 @@ The plan of work lives in `docs/build-plan.md` (milestones M0–M8).
   shell) rewrites `BASE_PATH=/` into `C:/Program Files/Git/`.
 - **Backup import:** `pnpm --filter @workspace/api-server run import-backup
   "<zip>" [--replace]` (`artifacts/api-server/scripts/importBackup.ts`). Local
-  and warroom-dev only (checks the URL and `current_database()`); refuses a
+  and warroom-dev only (the same host guard); refuses a
   non-empty DB unless `--replace` (truncates first). Preserves ids
   (`OVERRIDING SYSTEM VALUE`), resets the sequences, writes `files/<key>` into
   `.local-storage/<key>`. Chat attachments and the website config aren't in the
@@ -153,7 +157,8 @@ Names only — values live in `.env` (local) and Replit Secrets (production).
 
 | Key | Used by | Notes |
 |---|---|---|
-| `DATABASE_URL` | `lib/db`, drizzle config | Locally: Neon `warroom-dev` **only** |
+| `DATABASE_URL` | `lib/db`, drizzle config | Locally: Neon project `warroom-dev` **only** |
+| `DEV_DATABASE_HOST` | `lib/db/src/env.ts` | Local only: the warroom-dev endpoint host; must match `DATABASE_URL`'s host or nothing connects |
 | `APP_PIN` | `pinAuth.ts` | The PIN (login screen currently takes exactly 4 digits) |
 | `SESSION_SECRET` | `pinAuth.ts` | Signs the session token |
 | `ANTHROPIC_API_KEY` | `anthropic.ts` | Missing → AI endpoints return 503; the rest works |

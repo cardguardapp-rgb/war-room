@@ -9,11 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { getTableColumns, type Table } from "drizzle-orm";
-import {
-  DEV_DATABASE_NAME,
-  databaseNameFromUrl,
-  isLocalDev,
-} from "@workspace/db/env";
+import { assertLocalDatabase, isLocalDev } from "@workspace/db/env";
 import {
   pool,
   profileTable,
@@ -51,12 +47,11 @@ async function main() {
   if (!isLocalDev()) fail("this script only runs locally in development, never on Replit.");
   const url = process.env["DATABASE_URL"];
   if (!url) fail("DATABASE_URL is not set in .env.");
-  if (databaseNameFromUrl(url) !== DEV_DATABASE_NAME) {
-    fail(`DATABASE_URL is not the ${DEV_DATABASE_NAME} database.`);
-  }
-  const { rows: dbRows } = await pool.query<{ name: string }>("select current_database() as name");
-  if (dbRows[0]?.name !== DEV_DATABASE_NAME) {
-    fail(`connected database is "${dbRows[0]?.name}", not ${DEV_DATABASE_NAME}.`);
+  // @workspace/db already ran this on import; repeated so the guard is explicit here.
+  try {
+    assertLocalDatabase(url);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
   }
 
   // --- Read the zip --------------------------------------------------------
@@ -81,7 +76,7 @@ async function main() {
     ]);
     if (!rows[0]?.reg) {
       fail(
-        `table "${t.name}" doesn't exist in ${DEV_DATABASE_NAME}. Create the tables first with: pnpm --filter @workspace/db push`,
+        `table "${t.name}" doesn't exist in warroom-dev. Create the tables first with: pnpm --filter @workspace/db push`,
       );
     }
   }
@@ -92,7 +87,7 @@ async function main() {
   );
   const existing = Number(countRows[0]?.n ?? 0);
   if (existing > 0 && !replace) {
-    fail(`${DEV_DATABASE_NAME} already holds ${existing} rows. Run again with --replace to empty it first.`);
+    fail(`warroom-dev already holds ${existing} rows. Run again with --replace to empty it first.`);
   }
 
   // --- Load rows (ids preserved) -------------------------------------------
@@ -152,7 +147,7 @@ async function main() {
     files++;
   }
 
-  console.log(`\nImported into ${DEV_DATABASE_NAME}:`);
+  console.log("\nImported into warroom-dev:");
   for (const [name, n] of Object.entries(counts)) console.log(`  ${name.padEnd(20)} ${n}`);
   console.log(`  ${"files".padEnd(20)} ${files} → ${localStorageRoot()}`);
   console.log("");
