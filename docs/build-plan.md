@@ -56,7 +56,7 @@ but old attachments won't re-send, and the Website page starts from defaults.
 
 ---
 
-## [ ] M1: Security
+## [x] M1: Security
 
 **Scope**
 - Login lockout after 5 wrong PINs, with a rising wait.
