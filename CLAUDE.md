@@ -1,129 +1,246 @@
-# Job Search Assistant — CLAUDE.md
+# War Room (Job Search Assistant) — CLAUDE.md
 
-This file orients any future development session (including Claude Code over
-SSH) on this project. It is a **personal, single-user** job search and
-application assistant. There is no multi-tenant auth — access is gated by a
-single 4-digit PIN.
+War Room is Amy's **personal, single-user** job search and application
+assistant. There are no user accounts: access is gated by one PIN. It was built
+on Replit and is now developed **locally on Windows with Claude Code**, then
+released through GitHub (`cardguardapp-rgb/war-room`, branch `main`) to the
+existing Replit deployment.
+
+The plan of work lives in `docs/build-plan.md` (milestones M0–M8).
+
+---
+
+## Working rules (mandatory)
+
+- **Machines.** Locally: Windows 11, PowerShell 5.1, Node 24. Replit also runs
+  Node 24. pnpm runs package scripts through Git Bash (`script-shell` is set in
+  the user's pnpm config, not in the repo's `.npmrc`), so **package scripts may
+  use POSIX syntax**. But **every command given to Amy must be PowerShell or
+  Replit Shell, and must say which**.
+- **One command at a time**, copy-paste ready.
+- **Never read `.env` and never ask for secrets to be pasted.** Name the keys;
+  Amy edits `.env` (in Notepad) and Replit Secrets directly.
+- **Never use or suggest Replit Agent.**
+- **Start of every session:** check the branch and last commit, `git fetch`, and
+  say whether local and `origin/main` differ.
+- **Commit at the end of each milestone** with a clear message. **Push only when
+  Amy says push.**
+- **Databases.** Local development uses the Neon database **`warroom-dev` only**.
+  **Never connect to the production database**: the live app keeps its Replit
+  Postgres database, which holds Amy's real data. This includes the smoke tests
+  that touch the DB (`polishTest.ts`, `discoverTest.ts`) and any
+  `drizzle-kit` command.
+- **No schema changes.** New kinds of data go in the `documents` table (free-text
+  `type` + `content_json`), as the app already does. If something truly needs a
+  schema change, **stop and ask first**. (Note `scripts/post-merge.sh` runs
+  `pnpm --filter db push` on Replit, so a schema edit merged to `main` would be
+  pushed to the production database.)
+- **`pnpm run dev:phone`** starts the API and the web app together, serves the
+  web app over https on **port 5175** on the local network (Amy's other apps use
+  5173), and prints **`War Room dev ready`** when both are up. (Added in M0.)
+- **Australian English everywhere** — UI text, AI output, docs. The AI content
+  rules below stay mandatory, including for everything the interview coach
+  says: **never invent experience, metrics or employers.**
+- **Screens.** Mobile screens must work on the Galaxy Fold6 **cover screen
+  (368px)** and **inner screen (707px)**, in **light and dark**. Interview
+  features (mock interview, live listen, cue cards) are **laptop-first: Chrome on
+  Windows 11**.
+- **No helper or explainer text in the UI.** Where help is genuinely needed, use
+  an (i) tooltip.
+- **The role-chat coach is right as it is.** Never change `CHAT_SYSTEM` in
+  `prompts.ts`, or the coach's skills, tone and tenor, without asking first. The
+  mock interview, live cue cards and debrief all reuse `CHAT_SYSTEM` **unchanged**
+  as their base, adding only a short mode instruction on top (format and length
+  for that mode). Make the coach faster through streaming, prompt caching and
+  model choice, never by rewriting it.
+- **Model defaults.** Ask before changing any model ID default. Amy decides
+  whether a coach model changes.
+
+---
 
 ## Stack
 
-- **Frontend**: React + Vite + TypeScript + Tailwind CSS, mobile-first
-  (390px viewport baseline). Lives at `artifacts/job-search-assistant`.
-- **Backend**: Node.js + Express 5 + TypeScript. Lives at
-  `artifacts/api-server`. Bundled with esbuild.
-- **Database**: **SQLite via `better-sqlite3`** — deliberately NOT the
-  monorepo's default Postgres/Drizzle stack (`@workspace/db`). This app does
-  not use that package at all.
-- **API contract**: Plain REST + `fetch` on the frontend. This app does
-  **not** use the monorepo's OpenAPI/Orval codegen pattern
-  (`@workspace/api-client-react`) — there are no generated hooks. Any new
-  endpoint must be added by hand on both the Express route and the frontend
-  fetch call.
-- **File storage**: Local disk at `artifacts/api-server/uploads` (resumes,
-  generated documents). Not S3/object storage — this is a personal tool
-  running on a single instance.
-- **Auth**: A single 4-digit PIN (`APP_PIN` env var). No user accounts, no
-  passwords, no OAuth. A session cookie (HMAC of `APP_PIN` using
-  `SESSION_SECRET`) is issued on successful PIN entry and checked on every
-  API route except `/api/healthz` and `/api/auth/*`.
+- **Monorepo:** pnpm workspaces (`artifacts/*`, `lib/*`, `scripts`), Node 24,
+  TypeScript 5.9.
+- **Frontend:** React 19 + Vite 7 + Tailwind 4 + shadcn/ui (Radix), wouter
+  routing, TanStack Query. Lives at `artifacts/job-search-assistant`
+  (`@workspace/job-search-assistant`). Mobile-first.
+- **Backend:** Express 5 + TypeScript, bundled by esbuild (`build.mjs`) to
+  `dist/index.mjs`. Lives at `artifacts/api-server` (`@workspace/api-server`).
+  Logging with pino / pino-http.
+- **Database:** **PostgreSQL through Drizzle ORM** — the shared package
+  `@workspace/db` (`lib/db`): `lib/db/src/index.ts` creates a `pg` Pool from
+  `DATABASE_URL`; tables in `lib/db/src/schema/`. The API re-exports the client
+  and tables from `artifacts/api-server/src/lib/db.ts` — import from there.
+- **File storage:** **Replit Object Storage** (GCS through the Replit sidecar at
+  `127.0.0.1:1106`), wrapped by `artifacts/api-server/src/lib/objectStore.ts`
+  (`newObjectKey`, `uploadObject`, `downloadObject`, `objectExists`,
+  `deleteObject`). Keys are relative to `PRIVATE_OBJECT_DIR`. Nothing durable is
+  written to local disk.
+- **AI:** `@anthropic-ai/sdk` (Claude). Web search for Discover: Tavily API.
+- **API contract:** plain REST + `fetch` in
+  `artifacts/job-search-assistant/src/lib/api.ts` (`fetchApi` /
+  `fetchMultipart`, base `/api`). The monorepo's OpenAPI/Orval packages
+  (`lib/api-spec`, `lib/api-client-react`, `lib/api-zod`) exist but only the
+  health check uses them (`HealthCheckResponse`); **there are no generated hooks
+  in use**. A new endpoint is added by hand on both the Express route and
+  `api.ts`.
+- **Auth:** one PIN (`APP_PIN`). See "Auth (current)".
+- `artifacts/mockup-sandbox` is Replit's design canvas scaffold, not part of the
+  app.
+- `.agents/memory/` holds notes from the Replit era; the useful ones are folded
+  into "Gotchas" below.
 
-## Environment variables (Replit Secrets)
+## Running
 
-- `APP_PIN` — the 4-digit PIN required to unlock the app.
-- `SESSION_SECRET` — used to sign the session cookie.
-- `ANTHROPIC_API_KEY` — **required for AI features** (job extraction + resume
-  tailoring). If unset, those endpoints return `503` with a clear message; the
-  rest of the app works. Add it in Replit Secrets and restart the workflow.
-- `TAVILY_API_KEY` — **required for Discover search** (the web search behind the
-  Discover page). If unset, `POST /discover/search` returns `503`; the rest of
-  Discover (editing/saving parameters) still works. Discover search also needs
-  `ANTHROPIC_API_KEY` for the classification step. Add both in Replit Secrets.
+**On Replit (production + Replit dev):**
+- API: `artifacts/api-server/.replit-artifact/artifact.toml` — port **8080**,
+  served at `/api`, health check `/api/healthz`. Production runs
+  `node --enable-source-maps artifacts/api-server/dist/index.mjs`.
+- Web: `artifacts/job-search-assistant/.replit-artifact/artifact.toml` — port
+  20399, `BASE_PATH=/`, built to `dist/public`, served statically with a
+  `/* → /index.html` rewrite. Replit's path router sends `/api` to the API.
+- Deployment target is **autoscale** (ephemeral disk). `replit.nix` adds
+  `libreoffice-still` (for PDF conversion).
+- `scripts/post-merge.sh`: `pnpm install --frozen-lockfile` then
+  `pnpm --filter db push`.
+
+**Package scripts:**
+- API `dev` = `export NODE_ENV=development && pnpm run build && pnpm run start`
+  (build then run; no watch). Needs `PORT`.
+- Web `dev` = `vite --host 0.0.0.0`. `vite.config.ts` **requires `PORT` and
+  `BASE_PATH`** and throws without them. `runtimeErrorOverlay` (a Replit plugin)
+  is always on; `cartographer` and `dev-banner` load only when `REPL_ID` is set.
+  There is no `/api` dev proxy yet.
+- Root: `pnpm run typecheck`, `pnpm run build`.
+- `lib/db`: `push` / `push-force` (drizzle-kit). **Don't run them** (no schema
+  changes; never against production).
+
+**Locally (Windows):** M0 adds `.env` loading in development (server and
+drizzle config), a Vite `/api` proxy, `dev:phone`, a local-disk storage driver
+used when the Replit sidecar isn't present, and the backup-import script. Until
+M0 is done the app does not run locally.
+
+## Environment variables
+
+Names only — values live in `.env` (local) and Replit Secrets (production).
+
+| Key | Used by | Notes |
+|---|---|---|
+| `DATABASE_URL` | `lib/db`, drizzle config | Locally: Neon `warroom-dev` **only** |
+| `APP_PIN` | `pinAuth.ts` | The PIN (login screen currently takes exactly 4 digits) |
+| `SESSION_SECRET` | `pinAuth.ts` | Signs the session token |
+| `ANTHROPIC_API_KEY` | `anthropic.ts` | Missing → AI endpoints return 503; the rest works |
+| `TAVILY_API_KEY` | `tavily.ts` | Missing → `POST /discover/search` returns 503 |
+| `PRIVATE_OBJECT_DIR` | `objectStore.ts` | `/<bucket>/<dir>`; Replit provisions it (with `PUBLIC_OBJECT_SEARCH_PATHS`, `DEFAULT_OBJECT_STORAGE_BUCKET_ID`, which the code doesn't read) |
+| `PORT` | API `index.ts`, `vite.config.ts` | Required by both |
+| `BASE_PATH` | `vite.config.ts` | Required; real value `/` |
+| `SOFFICE_PATH` | `pdf.ts` | Optional LibreOffice path |
+| `CHROMIUM_PATH` | `pageRender.ts` | Optional Chromium path |
+| `LOG_LEVEL`, `NODE_ENV` | logger, cookies | |
+
+Later milestones add `AI_MODEL_*` (M2–M6) and the AssemblyAI key (M4).
 
 ## Folder structure
 
 ```
 artifacts/api-server/
+  build.mjs                 # esbuild bundle → dist/index.mjs
   src/
-    app.ts                 # Express app: middleware, mounts /api router
-    index.ts                # HTTP server bootstrap
+    index.ts                # HTTP server bootstrap (PORT required)
+    app.ts                  # pino-http, cors, cookie-parser, json 2mb, mounts /api
     lib/
-      db.ts                 # better-sqlite3 connection + schema DDL + row types
-      paths.ts               # resolves uploadsDir / dataDir regardless of cwd
-      logger.ts              # pino logger (use req.log / logger, never console.log)
-      resumeParser.ts        # pure .docx -> { resumeJson, styleMap, warnings } (JSZip + fast-xml-parser)
-      anthropic.ts           # Anthropic client; JSON parse + retry-once (parseJsonWithRetry/opusJson/createJson); error->HTTP mapping
-      prompts.ts             # model IDs + system prompts (JOB_EXTRACTION_SYSTEM, TAILOR_SYSTEM)
-      jobExtract.ts          # URL fetch + @mozilla/readability + Sonnet 4.6 metadata extraction
-      tailor.ts              # resume tailoring calls (Opus 4.8, streaming, initial/finalize/revise)
-      coverLetters.ts        # cover-letter generation (Opus 4.8) — full + plain + short
-      appQuestions.ts        # application-question answering (Opus 4.8) — resume-grounded only
-      docBuild.ts            # resume + cover-letter .docx builders (docx pkg) from JSON + style map
-      pdf.ts                 # docx->pdf via LibreOffice (nix store) + pdf-lib fallback renderer
-      tavily.ts              # Tavily web-search client (Discover) — single + multi-query, URL de-dupe
-      discover.ts            # Discover: settings defaults, query building, AI classification, de-dupe
-    middlewares/
-      pinAuth.ts             # PIN verification, session cookie issue/check, requirePin guard
+      db.ts                 # re-exports @workspace/db client + tables; ensureProfileRow()
+      objectStore.ts        # Replit Object Storage helper (sidecar credentials)
+      logger.ts             # pino (use req.log / logger, never console.log)
+      serialize.ts          # camelCase row → snake_case API shape
+      resumeParser.ts       # pure .docx → { resumeJson, styleMap, warnings } (JSZip + fast-xml-parser)
+      anthropic.ts          # client; opusJson / createJson / createJsonFromImages / chatComplete;
+                            #   parseJsonWithRetry; AiConfigError / AiJsonError; aiErrorResponse
+      prompts.ts            # model IDs + every system prompt (CHAT_SYSTEM, TAILOR_SYSTEM, …)
+      jobExtract.ts         # URL fetch + Readability (+ headless render fallback), image extraction
+      tailor.ts             # resume tailoring (streamed Opus call, initial/finalize/revise)
+      coverLetters.ts       # cover letters (full + short; plain = full.body)
+      appQuestions.ts       # application-question answers (resume-grounded only)
+      chatStore.ts          # role chat persistence; formatCoachingNotes()
+      chatAttachments.ts    # chat upload ingest (images/PDF → object storage; docx/txt/md/csv → text)
+      docBuild.ts           # resume + cover-letter .docx builders (docx package)
+      pdf.ts                # docx → pdf via LibreOffice, pdf-lib fallback renderer
+      skillGrouping.ts      # groups flat skills into discipline groups for layout (Sonnet)
+      tavily.ts             # Tavily client (multi-query, URL de-dupe)
+      discover.ts           # Discover settings defaults, query plan, classification, de-dupe
+      pageRender.ts         # headless Chromium --dump-dom
+      pageScan.ts           # harvest posting links from rendered listing pages
+      siteBuild.ts          # personal-website static site + preview builder
+    middlewares/pinAuth.ts  # PIN check, session token, requirePin
     routes/
-      index.ts               # mounts health (public), auth (public), then requirePin, then the rest
-      health.ts               # GET /healthz
-      auth.ts                 # POST /auth/login, GET /auth/status, POST /auth/logout
-      profile.ts               # profile GET/PATCH; resume parse/confirm/download (multer, .docx only, 5MB)
-      jobs.ts                   # job CRUD; POST /jobs/extract; tailoring endpoints (tailor/qa/finalize/revise/approve)
-      documents.ts               # documents list + GET /documents/:id/download/:format (docx|pdf, lazy-built)
-      generate.ts                 # /jobs/:id/cover-letters(+finalize/revise/approve); /jobs/:id/questions(+finalize/save)
-      discover.ts                 # Discover: GET/PUT /discover/settings, POST /discover/search, POST /discover/dismiss
-  uploads/                # gitignored — uploaded resumes + generated docs live here
-  data/                   # gitignored — app.db (SQLite file) lives here
+      index.ts              # health, auth (public) → requirePin → everything else
+      health.ts             # GET /healthz
+      auth.ts               # POST /auth/login, GET /auth/status, POST /auth/logout
+      profile.ts            # profile GET/PATCH; resume parse/confirm/download; GET /profile/export
+      jobs.ts               # job CRUD; extract / extract-image; assess; tailor/qa/finalize/revise/approve
+      documents.ts          # list; regenerate; download docx|pdf (lazy build + cache)
+      generate.ts           # role chat; cover letters; application questions
+      discover.ts           # settings, search, dismiss
+      website.ts            # personal website config, AI draft/write, preview, export zip
+  test/                     # tsx smoke scripts (see "Smoke tests")
 
-artifacts/job-search-assistant/
-  src/
-    pages/                # Profile, Jobs, JobDetail, Discover
-    components/           # shared UI (nav shell: bottom tab bar mobile / sidebar desktop, etc.)
-    ...
+artifacts/job-search-assistant/src/
+  AppRouter.tsx             # wouter <Switch>: / and /jobs, /jobs/:id, /profile, /discover, /website
+  lib/api.ts                # every API call + shared types (mirror of server shapes)
+  pages/                    # jobs, job-detail, profile, discover, website, login, not-found
+  components/jobs/          # AddJobDialog, TailorFlow, ResumeDiff, CoverLetterFlow, AppQuestions, RoleChat, CopyButton
+  components/profile/       # ResumeReview, ExtraAnswers, AdditionalContext, resumeDraft
+  components/discover/      # SettingsEditor, ResultCard
+  components/layout/        # AppLayout (bottom tab bar mobile / sidebar desktop)
+  components/ui/            # shadcn/ui + ai-progress
+
+lib/db/                     # @workspace/db — Drizzle schema + pg Pool
 ```
 
-## Database schema (SQLite)
+## Database schema (Postgres, Drizzle)
 
-- **`profile`** — single row, `id = 1` (enforced by CHECK). Fields:
-  `resume_filename`, `resume_json`, `style_map_json`, `extra_answers_json`,
-  `updated_at`. Represents the user's one base resume + parsed structured
-  data + writing-style preferences + answers to recurring application
-  questions.
-- **`jobs`** — one row per job the user is tracking. Fields: `title`,
-  `company`, `source_url`, `posting_text`, `status`, `created_at`.
-  `status` is a plain **text** column (default `'New'`, no enum/check
-  constraint), so adding a status needs **no migration** — just extend
+Defined in `lib/db/src/schema/`. Drizzle rows are **camelCase** in JS; the API
+returns **snake_case** (see `serialize.ts` and the per-route serialisers).
+
+- **`profile`** — single row, `id = 1` (`ensureProfileRow()` inserts it).
+  `resume_filename` (the **object storage key** of the uploaded base .docx),
+  `resume_json`, `style_map_json`, `extra_answers_json` (jsonb), `extra_context`
+  (text, the Profile "Additional context" box — stored and editable; no AI
+  prompt reads it today), `updated_at`.
+- **`jobs`** — `id` serial, `title`, `company`, `location`, `work_arrangement`,
+  `source_url`, `posting_text`, `status` (text, default `'New'`), `created_at`.
+  `status` has no enum/check, so adding a status needs **no migration** — extend
   `VALID_STATUSES` in `routes/jobs.ts` and the `JobStatus` union +
-  `statusColors`/`statusDot`/`STATUS_ORDER` in the frontend. Pipeline order:
-  `New` → `Tailoring` → `Ready` → `Applied` → `Interview` → `Offer` →
-  `Rejected` → `Not Applying`.
-- **`documents`** — generated artefacts tied to a job (`job_id`, cascade
-  delete). `type` is free text; current values: `resume`, `cover_letter`,
-  `cover_letter_plain`, `cover_note`, `assessment` (the fit score/summary/flags,
-  one per job — see below), and `chat` (the saved role-advice transcript,
-  `content_json = { messages }`, one per job). Holds `content_json` plus paths
-  to generated `.docx`/`.pdf` files under `uploads/`. New "types" piggyback on
-  this table (free-text `type` + jsonb `content_json`) to avoid schema
-  migrations. `GET /jobs` joins in each job's `assessment` and returns
-  `fit_score`/`fit_note` on the list rows so the Jobs page can show a fit pill.
-- **`qa_log`** — a history of application-question/answer pairs tied to a
-  job, for reuse and consistency across applications.
-- **`discover_settings`** — single row, `id = 1`. Holds the user's editable
-  Discover search parameters as JSON (`settings_json`). Absent → the built-in
-  defaults are used.
-- **`discover_dismissed`** — one row per dismissed listing URL (`url` primary
-  key). Dismissed URLs are filtered out of every future search.
+  `statusColors`/`statusDot`/`STATUS_ORDER` in the frontend. Order: `New` →
+  `Tailoring` → `Ready` → `Applied` → `Interview` → `Offer` → `Rejected` →
+  `Not Applying`.
+- **`documents`** — artefacts tied to a job (`job_id` FK, `on delete cascade`).
+  `type` is **free text**; `content_json` jsonb; `docx_object_key` /
+  `pdf_object_key` (cached generated files in object storage, `null` until first
+  download). Current types:
+  - `resume` — approved tailored resume (`resume_json` shape)
+  - `cover_letter` — `{ salutation, re, body }`; `cover_letter_plain` — `{ text }`;
+    `cover_note` — `{ text }`
+  - `assessment` — fit score/summary/flags, one per job
+  - `chat` — role-chat transcript `{ messages }`, one per job
+  **New kinds of data go here** (new `type` + `content_json`). Planned:
+  `interview_prep` (M3), `mock_interview` (M4), `interview` (M7).
+- **`qa_log`** — question/answer pairs per job (FK cascade).
+- **`discover_settings`** — single row `id = 1`, `settings_json`. Absent → defaults.
+- **`discover_dismissed`** — one row per dismissed URL (`url` primary key).
 
-Foreign keys are enforced (`PRAGMA foreign_keys = ON`); deleting a job
-cascades to its documents and QA log entries.
+Deleting a job cascades to its documents and QA log.
+
+**Not in the database:** the personal-website config is a JSON object in
+object storage at the fixed key `website/config.json`.
 
 ## Resume data model
 
-The `profile` row stores three JSON blobs as text. The API layer parses them
-on the way out (`GET /profile` returns real objects, not strings) and
-`JSON.stringify`s on the way in. The canonical shapes are defined and exported
-in `artifacts/api-server/src/lib/resumeParser.ts` and mirrored on the frontend
-in `artifacts/job-search-assistant/src/lib/api.ts` — keep those two in sync.
+The canonical shapes are exported from
+`artifacts/api-server/src/lib/resumeParser.ts` and mirrored in
+`artifacts/job-search-assistant/src/lib/api.ts` — keep the two in sync. They are
+stored as jsonb and returned as real objects by `GET /profile`.
 
 ### `resume_json` (the parsed resume — single source of truth)
 
@@ -159,16 +276,14 @@ in `artifacts/job-search-assistant/src/lib/api.ts` — keep those two in sync.
 }
 ```
 
-Rules: nothing from the document is ever silently discarded — unclassified
-content lands in an `other` section and is surfaced to the user (see
-`warnings`) so they can reassign its `kind` on the review screen. Section
-order is preserved from the source document.
+Nothing from the document is ever silently discarded — unclassified content
+lands in an `other` section and is surfaced (`warnings`) so its `kind` can be
+reassigned on the review screen. Section order follows the source document.
 
 ### `style_map_json` (formatting captured from the actual file)
 
-Real values are read from the .docx run/style properties — never assumed.
-Sizes are points; colours are uppercase hex with a leading `#` (or `null` for
-inherit/auto).
+Real values read from the .docx run/style properties — never assumed. Sizes in
+points; colours uppercase hex with a leading `#` (or `null` for inherit/auto).
 
 ```jsonc
 {
@@ -176,357 +291,327 @@ inherit/auto).
   "defaults": { "fontFamily", "fontSizePt", "color" },
   "elements": {
     // each is a StyleEntry: { fontFamily, fontSizePt, bold, italic, color }
-    "name":           { … },   // the name heading at the top
-    "sectionHeading": { … },   // section headings
-    "jobTitle":       { … },   // role/company header lines
-    "body":           { … },   // body paragraphs
-    "bullet":         { … }    // bullet points
+    "name": { … }, "sectionHeading": { … }, "jobTitle": { … },
+    "body": { … }, "bullet": { … }
   }
 }
 ```
 
 ### `extra_answers_json`
 
-An **array** of `{ id, question, answer }` — Q/A pairs that accumulate over
-time (later phases add to it when the AI asks clarifying questions). Editable
-and deletable on the Profile page. Saved via `PATCH /profile`.
+An **array** of `{ id, question, answer }` that accumulates over time (tailoring
+clarifying answers are added automatically). Editable on the Profile page; saved
+via `PATCH /profile`.
 
 ### Resume upload flow (two-step, no AI)
 
-1. `POST /profile/resume/parse` (multipart, field `resume`, `.docx` only,
-   5MB cap) — saves the original file and returns
-   `{ filename, resume_json, style_map_json, warnings }` for review. **Does
-   not** touch the `profile` row.
+1. `POST /profile/resume/parse` (multipart field `resume`, `.docx` only, 5MB) —
+   stores the file in object storage and returns
+   `{ filename, resume_json, style_map_json, warnings }` for review. Does **not**
+   touch the `profile` row.
 2. `PUT /profile/resume` `{ filename, resume_json, style_map_json }` — commits
-   the (possibly user-corrected) structure and marks that file as the base
-   resume, deleting any previous resume file. The parsed structure is now the
-   source of truth; the `.docx` is kept only as a formatting reference
+   the (possibly corrected) structure and makes that file the base resume,
+   deleting the previous one. The .docx is kept only as a formatting reference
    (`GET /profile/resume` downloads it).
 
-Parsing is pure — no AI calls. `resumeParser.ts` parses the raw
-WordprocessingML directly (JSZip + fast-xml-parser) rather than via mammoth,
-because run-level font/size/colour is needed for the style map. Dev smoke
-test: `pnpm --filter @workspace/api-server exec tsx test/parseFixture.ts`.
+Parsing reads WordprocessingML directly (JSZip + fast-xml-parser), not mammoth,
+because run-level font/size/colour is needed for the style map.
+
+## AI content rules (mandatory)
+
+Apply to every AI output: resumes, cover letters, application answers, website
+copy, the role chat, and everything the interview coach says (prep pack, mock
+interview, cue cards, debrief).
+
+1. **Australian English spelling** in all AI-generated and UI text
+   (organise, colour, optimise, specialise, centre).
+2. **Never fabricate experience, qualifications, employers, dates, metrics or
+   achievements.** Tailoring re-emphasises, re-orders and re-words Amy's real
+   content; it never invents. If the data isn't there, surface the gap or ask —
+   don't make up an answer.
+3. Generated content stays traceable to stored source data:
+   `profile.resume_json`, `profile.extra_answers_json`, `qa_log`, and the saved
+   role chat (via `formatCoachingNotes`, which is guidance, not fact).
+
+## Models and prompts
+
+All model IDs and system prompts are in `artifacts/api-server/src/lib/prompts.ts`
+(today as hard-coded constants; M2 moves each to an `AI_MODEL_*` env var with
+these values as defaults):
+
+| Constant | Model | Used for |
+|---|---|---|
+| `EXTRACT_MODEL` | `claude-sonnet-4-6` | Job extraction (URL/text/screenshots) + fit assessment (Amy chose this) |
+| `TAILOR_MODEL` | `claude-opus-4-8` | Resume tailoring (adaptive thinking, effort high, streamed) |
+| `DISCOVER_MODEL` | `claude-sonnet-4-6` | Discover result classification |
+| `CHAT_MODEL` | `claude-opus-4-8` | Role-advice chat |
+| `WEBSITE_MODEL` | `claude-opus-4-8` | Personal-website copy |
+| `SKILL_GROUPING_MODEL` | `claude-sonnet-4-6` | Grouping skills for the .docx layout |
+
+`opusJson` and `chatComplete` in `anthropic.ts` also default to
+`claude-opus-4-8` when no model is passed. System prompts are sent with
+`cache_control: ephemeral`. **All model JSON parsing retries once** on malformed
+output (`parseJsonWithRetry`) before a clean 502 (`AiJsonError`).
+`aiErrorResponse` maps errors: missing key / invalid key / billing → 503, rate
+limit → 429, others → 502.
+
+Prompts: `JOB_EXTRACTION_SYSTEM`, `JOB_IMAGE_EXTRACTION_SYSTEM`, `TAILOR_SYSTEM`
+(senior-recruiter tailoring with anti-AI-writing rules, ATS/rejection-risk/bullet
+checks and the JSON contract), `COVER_LETTER_SYSTEM`, `APP_QUESTIONS_SYSTEM`,
+`CHAT_SYSTEM` (**do not change without asking**), `WEBSITE_DRAFT_SYSTEM`,
+`WEBSITE_FIELD_SYSTEM`, `SKILL_GROUPING_SYSTEM`, `DISCOVER_CLASSIFY_SYSTEM`.
 
 ## Pages (frontend)
 
-- **Profile** — upload/replace the base resume (`.docx` only, 5MB). On upload
-  it parses into a structured review screen (sections editable inline, each
-  section's `kind` reassignable, unclassified content flagged); confirming
-  saves it as the source of truth. **Everything is reorderable** via up/down
-  arrows — sections, roles, education items, and every bullet/skill/summary
-  paragraph/detail line (`moveAt` helper + a `MoveHeader` on each role/education
-  card; arrows in `LineList`). Roles also have a **"Sort by date (newest first)"**
-  button that parses each role's free-text `dates` (`sortExperienceByDate` in
-  `ResumeReview.tsx`; "Present"/"Current" sorts to the top, undated roles sink). Also shows the detected formatting (style
-  map) and a saved-answers (Q/A) editor. Re-uploading warns before replacing
-  the parsed structure. UI lives in `src/pages/profile.tsx` +
-  `src/components/profile/*`.
-- **Jobs** — list of tracked jobs with status badges (New / Tailoring /
-  Ready / Applied / Not Applying) and a **fit pill** (from the saved
-  assessment). Add a job by pasting a URL or the raw posting text. On create,
-  `POST /jobs` **auto-generates the fit assessment** from the posting when one
-  wasn't supplied (e.g. saved from Discover), so the score shows in the list
-  immediately (best-effort — never blocks creation). **Filter cards** at the top
-  show counts by status and by fit group (Strong 8–10 / Worth a look 6–7 / Weak
-  1–5 / Not scored); clicking a card filters the list (status + fit combine;
-  "Clear filters" resets). `GET /jobs` returns `fit_score`/`fit_note` per row.
-  **Status is editable inline** on each card via a `Select` (updates through
-  `PATCH /jobs/:id`); its wrapper calls `stopPropagation` + `preventDefault` so
-  the click neither triggers the card's wouter `Link` nav nor a native anchor
-  page load.
-- **Job Detail** — full posting text, tailored resume and cover letter(s)
-  once generated, document downloads, status control.
-- **Discover** — web job search filtered to the user's parameters. A "Search
-  now" button plus an editable parameters panel (role levels, office-region
-  rule, remote rule, exclusions, extra keywords). Each result is a mobile-first
-  card: title, company, location/arrangement + seniority/location-match badges,
-  a one-line reason, "Open listing" (new tab), "Tailor for this role" (seeds the
-  Add-a-job dialog → posting fetch with paste fallback → Job Detail), "Save"
-  (adds to Jobs as `New`), and "Dismiss" (URL never shown again). A standing note
-  says results are indicative. UI: `src/pages/discover.tsx` +
-  `src/components/discover/{SettingsEditor,ResultCard}.tsx`.
+Navigation: **bottom tab bar on mobile, sidebar on desktop** — an explicit
+product requirement; don't replace it with a hamburger menu.
 
-Navigation: bottom tab bar on mobile, sidebar on desktop. This is an
-explicit product requirement, not just a default pattern — do not replace it
-with e.g. a hamburger menu.
+- **Login** — PIN entry (currently exactly 4 digits).
+- **Profile** — upload/replace the base resume; structured review screen
+  (sections editable inline, `kind` reassignable, unclassified content flagged).
+  **Everything is reorderable** with up/down arrows — sections, roles, education
+  items and every bullet/skill/paragraph/detail line (`moveAt`, `MoveHeader`,
+  arrows in `LineList`). Roles have a **"Sort by date (newest first)"** button
+  (`sortExperienceByDate` in `ResumeReview.tsx`; "Present"/"Current" first,
+  undated last). Also: detected style map, saved answers editor, Additional
+  context, and **"Download all my data"**. Re-uploading warns before replacing.
+- **Jobs** — tracked jobs with status badges and a **fit pill** (from the saved
+  assessment). **Filter cards** show counts by status and fit group (Strong 8–10
+  / Worth a look 6–7 / Weak 1–5 / Not scored); clicking filters (status + fit
+  combine; "Clear filters" resets). **Status is editable inline** via a `Select`
+  whose wrapper calls `stopPropagation` + `preventDefault` so it doesn't trigger
+  the card's wouter `Link`.
+- **Job Detail** — posting, fit assessment, tailoring, cover letters,
+  application questions, role chat, document downloads, status. Mobile-only
+  bottom action bar above the tab bar
+  (`bottom-[calc(4rem+env(safe-area-inset-bottom))]`) for one-tap resume
+  .docx/PDF and cover letter/note.
+- **Discover** — web job search (see below).
+- **Website** — builds Amy's personal professional website from the resume:
+  editable config, AI drafting of headline/tagline/bio/about
+  (`POST /website/draft`) and single fields (`POST /website/write`), live
+  preview (`GET /website/preview?page=`) and a static-site zip
+  (`GET /website/export`).
 
-## AI content rules (apply once AI logic is implemented)
+## Flows
 
-These rules are **mandatory** for any AI-generated resume, cover letter, or
-Q&A content produced by this app:
+### Add a job
+- `POST /jobs/extract` `{ url }` or `{ posting_text }`. For a URL: fetch, clean
+  with `@mozilla/readability` + `jsdom`; if the fetch returns a blocked/empty SPA
+  shell, **render it in headless Chromium and re-run Readability**
+  (`renderAndClean`). Sonnet extracts title/company/location/work_arrangement and
+  the fit read. A blocked fetch returns `{ fetch_failed: true, message }` and the
+  UI offers a paste box. Doesn't save — the UI shows an editable review, then
+  `POST /jobs` saves with status `New`.
+- **Screenshots** (`POST /jobs/extract-image`, multipart `images`, 1–8
+  PNG/JPEG/GIF/WebP, ≤10MB each): held in memory only, sent to the extract model
+  with `JOB_IMAGE_EXTRACTION_SYSTEM`, which transcribes the posting and returns
+  the same fields in one pass. AddJobDialog tabs: From URL / Paste text /
+  Screenshot.
+- **Brief / no full JD yet** — a checkbox ("I don't have the full job
+  description yet") swaps the tabs for a small form: title (required),
+  company/location, what you know about the role, areas to highlight.
+  `buildBriefPosting()` (client-side, no AI) composes a labelled `posting_text`
+  telling the tailor it's a brief and to **ask rather than invent**. Saves via
+  `POST /jobs` with `brief: true`, which **skips the auto fit-assessment**.
+- On create, `POST /jobs` **auto-generates the fit assessment** when none was
+  supplied and it isn't a brief (best-effort; never blocks creation).
+  `POST /jobs/:id/assess` regenerates it. `GET /jobs` joins in each job's
+  assessment and returns `fit_score` / `fit_note`.
 
-1. **Always use Australian English spelling** in all AI-generated and
-   UI-authored text (e.g. "organise", "colour", "optimise", "specialise").
-2. **Never fabricate experience, qualifications, employers, dates, or
-   achievements.** Tailoring means re-emphasising, re-ordering, and
-   re-wording the user's real, existing resume content to match a job
-   posting — never inventing new experience that isn't grounded in the
-   user's actual profile data. If the profile lacks information needed to
-   answer a question convincingly, surface that gap to the user rather than
-   inventing an answer.
-3. Generated content should stay traceable to source data already stored in
-   `profile.resume_json` / `profile.extra_answers_json` / `qa_log`.
+### Resume tailoring (`tailor.ts` — never invents; asks instead)
+1. `POST /jobs/:id/tailor` — posting + resume + extra answers + coaching notes →
+   `{ proposed_resume, clarifying_questions[], recruiter_feedback }`; status
+   `Tailoring`.
+2. Clarifying questions are asked one at a time. `POST /jobs/:id/qa`
+   `{ question, answer }` saves each answer to **both** `qa_log` and
+   `profile.extra_answers_json`. **Questions are skippable** ("Skip", plus "Skip
+   the rest and let AI use best judgement"); skipped ones go to finalize as
+   `skipped[]`, are never re-asked, and are answered by best judgement from real
+   data only (never invented figures/employers/dates). If anything was skipped
+   the UI goes straight to review.
+3. `POST /jobs/:id/tailor/finalize` `{ answers, skipped, current_resume }` —
+   last pass (returns an empty `clarifying_questions`); recruiter review re-runs.
+4. `POST /jobs/:id/tailor/revise` `{ proposed_resume, edit_request }` — a
+   free-text edit; review re-runs.
+5. `POST /jobs/:id/tailor/approve` `{ proposed_resume }` — saves a `resume`
+   document; status `Ready`.
 
-## Adding a job + resume tailoring (AI)
+`proposed_resume` uses the `resume_json` schema so it can be diffed
+(`ResumeDiff`).
 
-**Models:** job extraction uses `claude-sonnet-4-6`; resume tailoring uses
-`claude-opus-4-8` (adaptive thinking, streaming). Both via `@anthropic-ai/sdk`.
-The client + JSON-response parsing + error→HTTP mapping live in
-`src/lib/anthropic.ts`. **The system prompts (including the full senior-recruiter
-tailoring prompt with the anti-AI-writing rules, ATS/rejection-risk/bullet
-checks, and the JSON contract) live in `src/lib/prompts.ts`** — `TAILOR_SYSTEM`.
+### Documents: .docx / PDF
+- **.docx** built on demand in `docBuild.ts` (`buildResumeDocx`,
+  `buildCoverLetterDocx`): single column, real paragraphs + runs, **no tables,
+  text boxes or images** (ATS-safe); fonts/sizes/colours/bold from the style map
+  (`defaultStyleMap()` fallback). Skills may be grouped by `groupSkills`.
+- **PDF** = the .docx converted by headless LibreOffice (`pdf.ts` `docxToPdf`),
+  so the two match. `soffice` is resolved from `SOFFICE_PATH`, then
+  `/usr/bin/soffice` / `/usr/bin/libreoffice`, then a glob of
+  `/nix/store/*libreoffice*-wrapped/bin/soffice`. Each conversion uses a
+  throwaway `-env:UserInstallation` profile. If `soffice` isn't found it falls
+  back to **pdf-lib** rendering from the JSON (`buildResumePdfFallback` /
+  `buildCoverLetterPdfFallback`) — functional, not a pixel match.
+- `GET /documents/:id/download/:format` (`docx`|`pdf`, only `resume` and
+  `cover_letter`): lazy-builds, caches in object storage, records the key, serves
+  with a friendly name (`Amy-Gibbons-Resume-Acme-Corp.docx`, `docFilename`).
+  `POST /documents/:id/regenerate` clears the cached keys so the next download
+  rebuilds. `POST /jobs/:id/documents/generate` is a 501 stub (superseded).
 
-### Add a job (`jobs` table gained `location` + `work_arrangement` columns)
-- `POST /jobs/extract` `{ url }` or `{ posting_text }`. For a URL: fetches the
-  page, extracts the main content with `@mozilla/readability` + `jsdom` (that
-  cleaned text becomes `posting_text`), then Sonnet 4.6 classifies
-  title/company/location/work_arrangement (`jobExtract.ts`). If the fetch is
-  blocked/junk (LinkedIn etc.) it returns `{ fetch_failed: true, message }` and
-  the UI offers a paste box. It does **not** save — the UI shows an editable
-  review, then `POST /jobs` saves with status `New`.
-- **Add from screenshot(s)** (`POST /jobs/extract-image`, multipart field
-  `images`, 1–8 PNG/JPEG/GIF/WebP, ≤10MB each): for postings you can't copy
-  (LinkedIn especially), the user attaches screenshot(s). Held in memory (multer
-  `memoryStorage`, never written to disk), base64'd to the **multimodal extract
-  model** (`claude-sonnet-4-6`) with `JOB_IMAGE_EXTRACTION_SYSTEM`, which
-  transcribes the posting into `posting_text` AND returns the same
-  title/company/location/summary/flags/fit fields in one pass
-  (`extractFromImages` in `jobExtract.ts`, `createJsonFromImages` in
-  `anthropic.ts`). Flows into the same review screen. The AddJobDialog has three
-  input tabs: From URL / Paste text / **Screenshot**.
+### Cover letters + application questions
+- **Cover letters** (`coverLetters.ts`, `COVER_LETTER_SYSTEM`): `full`
+  (`{ salutation, re, body }` — no address/date/header; hook opener, no grovelling
+  close) and `short` (3–5 sentence note); **plain** is `full.body`. Endpoints:
+  `POST /jobs/:id/cover-letters` (may return clarifying questions — answered via
+  `/jobs/:id/qa`), `.../finalize`, `.../revise` `{ current, edit_request }`,
+  `.../approve` `{ full, short }` → three documents (`cover_letter`,
+  `cover_letter_plain`, `cover_note`). Only `cover_letter` is downloadable; the
+  other two are copy-only.
+- **Application questions** (`appQuestions.ts`, `APP_QUESTIONS_SYSTEM`): answers
+  drafted **only** from resume + extra answers (asks first if facts are missing).
+  `POST /jobs/:id/questions` `{ questions }`, `.../finalize`
+  `{ questions, answers }`, `.../save` `{ answers }` → `qa_log`. Copy buttons use
+  `CopyButton` (clipboard with an `execCommand` fallback for mobile Safari).
+- The resume given to the model is the **latest approved tailored resume** for
+  the job if one exists, else the base resume (`loadGenContext` selects the
+  newest `type='resume'` doc specifically, so other doc types never shadow it).
 
-### Tailoring flow (`tailor.ts` — never invents; asks instead)
-1. `POST /jobs/:id/tailor` — initial pass. Sends posting + `resume_json` +
-   `extra_answers_json` to Opus 4.8. Returns `{ proposed_resume,
-   clarifying_questions[], recruiter_feedback }` and sets status `Tailoring`.
-2. If there are clarifying questions, the UI asks them one at a time.
-   `POST /jobs/:id/qa` `{ question, answer }` saves each answer to **both**
-   `qa_log` and `profile.extra_answers_json` (so future sessions know it).
-3. `POST /jobs/:id/tailor/finalize` `{ answers, current_resume }` — second pass
-   incorporating the answers; the recruiter review runs again.
-4. `POST /jobs/:id/tailor/revise` `{ proposed_resume, edit_request }` — apply a
-   free-text edit ("make the second MYOB bullet shorter"); review runs again.
-5. `POST /jobs/:id/tailor/approve` `{ proposed_resume }` — saves a `documents`
-   row (`type: 'resume'`, `content_json`) and sets status `Ready`.
+### Role-advice chat (the coach)
+- `RoleChat` on Job Detail talks to the senior-recruiter coach (`CHAT_SYSTEM`)
+  about one role, grounded in the posting (first 40,000 chars), the resume
+  (tailored if approved) and extra answers (`buildChatSystem` in `generate.ts`).
+- **The server owns the transcript.** The client posts only the new message +
+  files as **multipart** (`message`, `files`) to `POST /jobs/:id/chat` and gets
+  `{ reply, messages }` back. The last 20 turns are sent to the model.
+  `chatComplete` today is a **non-streaming** `messages.create`, `max_tokens`
+  2048, system prompt cached. `GET /jobs/:id/chat` loads the transcript;
+  `DELETE /jobs/:id/chat` clears it ("New chat").
+- Saved as one `chat` document per job (`chatStore.ts`
+  `loadChat`/`saveChat`/`clearChat`).
+- **Attachments** (`chatAttachments.ts`): images, PDF, `.docx`, `.txt`, `.md`,
+  `.csv`; max 5 files, 15MB each. Images + PDFs are stored in object storage and
+  re-sent every turn as `image`/`document` blocks (`buildTurnContent`);
+  docx/txt/md/csv are extracted to text at upload and inlined. `publicTurn()`
+  strips `objectKey`/extracted text before returning. `clearChat` deletes the
+  attachment objects; a failed AI call deletes the just-uploaded ones.
+- **Feeds generation:** `formatCoachingNotes()` renders the saved chat (incl.
+  attachments) into a conservative "PRIOR COACHING CONVERSATION" block (guidance,
+  not fact; never invent), threaded as `coachingNotes` into
+  `runTailor`/`runCoverLetters`/`runAppQuestions`.
 
-`proposed_resume` uses the **same `resume_json` schema** as the parsed resume
-(so it can be diffed against the original). Frontend: `src/pages/jobs.tsx` +
-`src/pages/job-detail.tsx` + `src/components/jobs/*` (AddJobDialog, TailorFlow,
-ResumeDiff).
+### Discover (web job search)
+- **Parameters** (`discover_settings`, defaults `DEFAULT_DISCOVER_SETTINGS` in
+  `discover.ts`): `roleTitles[]`, `officeRegion` (Gold Coast↔Brisbane),
+  `remoteRule` (full-time remote from Australia), `exclusions[]`,
+  `extraKeywords`, `sources[]` (pages to scan). `GET/PUT /discover/settings`;
+  `normaliseSettings` validates on read and write.
+- **Search** (`POST /discover/search`): `buildQueryPlan` builds capped lanes
+  (cap 12): general/company + careers/ATS + recruiter-agency lanes (big boards
+  and LinkedIn excluded); a recruiter "we're hiring" lane (LinkedIn allowed); a
+  LinkedIn lane (`/jobs/view/…` and hiring posts); an **ATS lane**
+  (`ATS_DOMAINS` — greenhouse/lever/ashby/workable/…); a **named-recruiter lane**
+  (`RECRUITER_DOMAINS`). Plan de-dup keys on query **+ includeDomains**.
+  `isSearchOrIndexPage` drops search/category pages, recruiter marketing pages,
+  document files and LinkedIn profile pages (keeps `/jobs/view/` and `/posts/`).
+  Tavily runs with `search_depth: advanced`.
+- **Pages to scan:** each `sources[]` URL is rendered in headless Chromium
+  (`pageRender.ts` — `CHROMIUM_PATH` or a `/nix/store/*chromium*` glob,
+  `--headless=new --dump-dom --virtual-time-budget=9000`) and posting links are
+  harvested (`pageScan.ts`, cap 25/source), in parallel with the web search.
+  Defaults to `["https://blackroc.co/jobs"]`; an explicit empty array is
+  respected. Slow cold (~15–40s/page); a failing source yields nothing.
+- **Classification:** batches of 8 through `DISCOVER_MODEL` with
+  `DISCOVER_CLASSIFY_SYSTEM` → per-result company/location/arrangement,
+  `seniority_match`/`location_match` (`yes`/`no`/`unsure`), one-line reason.
+  Deliberately lenient (default keep); `unsure` results are kept and flagged.
+- **De-dupe** at three points: Tavily URL merge, pre-classification host+title,
+  post-classification company+title. Response has `counts` (incl. `harvested`)
+  and an indicative-coverage `note`.
+- **Actions:** "Tailor for this role" seeds `AddJobDialog` (`JobSeed`) → extract
+  → Job Detail; "Save" creates a `New` job; "Dismiss" → `POST /discover/dismiss`.
 
-## Documents: .docx / PDF generation
+### Data export (backup)
+`GET /profile/export` → `war-room-backup-<date>.zip` with `data.json` (every
+table: `profile`, `jobs`, `documents`, `qa_log`, `discover_settings`,
+`discover_dismissed`, camelCase rows) and `files/<objectKey>` for the base
+resume and every cached docx/pdf. **Not included:** chat attachment objects and
+the website config (`website/config.json`).
 
-- **.docx** is built from JSON on demand in `src/lib/docBuild.ts` (the `docx`
-  package): `buildResumeDocx(resume_json, style_map)` and
-  `buildCoverLetterDocx(full, name, style_map)`. Single column, real paragraphs
-  + text runs, **no tables/text boxes/images** (ATS-safe). Fonts, sizes,
-  colours and bold come from the Phase 2 `style_map_json` so it matches the
-  original resume. `defaultStyleMap()` is the fallback (Calibri / navy).
-- **PDF** = the .docx converted by **headless LibreOffice** (`src/lib/pdf.ts`
-  `docxToPdf`), guaranteeing the two files match. `soffice` is resolved at
-  runtime — `SOFFICE_PATH` env, then `/usr/bin`, then a glob of
-  `/nix/store/*libreoffice*-wrapped/bin/soffice` (LibreOffice ships in the nix
-  store here; there is **no `replit.nix`** — the project uses Replit "modules").
-  Each conversion uses a throwaway `-env:UserInstallation` profile dir. If
-  `soffice` can't be found it falls back to `pdf-lib` rendering from the JSON
-  (`buildResumePdfFallback` / `buildCoverLetterPdfFallback`) — functional but
-  not a pixel match.
-- Download: `GET /documents/:id/download/:format` (`docx`|`pdf`) — only `resume`
-  and `cover_letter` documents. Lazy-builds, caches the file under `uploads/`,
-  records `docx_path`/`pdf_path`, and serves it with a nice filename
-  (`Amy-Gibbons-Resume-Acme-Corp.docx` via `docFilename`).
+## Auth (current — M1 changes this)
 
-## Cover letters (three types) + application questions
+- `POST /auth/login` `{ pin }` compares against `APP_PIN` with
+  `timingSafeEqual`; no attempt limit.
+- The session cookie `jsa_session` is `HMAC-SHA256(SESSION_SECRET, APP_PIN)` —
+  the **same static value for every login**, httpOnly, `sameSite: lax`, `secure`
+  in production, 30-day `maxAge`. It carries no issue time, so it never expires
+  server-side, and logout only clears the cookie on that device. Changing
+  `APP_PIN` or `SESSION_SECRET` invalidates every session.
+- `requirePin` guards everything except `/api/healthz` and `/api/auth/*`.
+- CORS is currently `origin: true, credentials: true` (reflects any origin). No
+  security headers.
 
-**Cover letters** (`coverLetters.ts`, `COVER_LETTER_SYSTEM` in `prompts.ts`,
-Opus 4.8). One flow → three outputs: `full` (`{ salutation, re, body }` — no
-address/date/header; hook opener, no grovelling close), `short` (3–5 sentence
-note); the **plain** version is just `full.body`. Writing rules (human, AU
-English, banned buzzwords, self-check "would a recruiter suspect AI?") are in
-the system prompt. Endpoints (job-scoped, in `generate.ts`):
-`POST /jobs/:id/cover-letters` (initial, may return clarifying questions —
-reuse `/jobs/:id/qa` to answer), `.../finalize`, `.../revise`
-`{ current, edit_request }`, `.../approve` `{ full, short }` → saves **three**
-`documents` rows: `cover_letter` (`{salutation,re,body}`), `cover_letter_plain`
-(`{text}`), `cover_note` (`{text}`). Only `cover_letter` is downloadable; plain
-and note are copy-only (rendered with a copy button from `content_json.text`).
+## PWA, mobile and resilience
 
-**Application questions** (`appQuestions.ts`, `APP_QUESTIONS_SYSTEM`, Opus 4.8).
-Paste questions → answers drafted **only** from resume + extra answers (asks
-clarifying questions first if it lacks facts; never guesses).
-`POST /jobs/:id/questions` `{ questions }`, `.../questions/finalize`
-`{ questions, answers }`, `.../questions/save` `{ answers }` → `qa_log`. Each
-drafted answer has a copy button. Frontend: `CoverLetterFlow`, `AppQuestions`,
-`CopyButton` (clipboard with a legacy `execCommand` fallback for mobile Safari).
+- **Installable PWA:** `public/manifest.webmanifest` (standalone, navy theme,
+  icons `icon-192/512.png`, `apple-touch-icon.png`), iOS meta +
+  `viewport-fit=cover`. `public/sw.js` serves `public/offline.html` for offline
+  navigations and deliberately **doesn't cache app JS/CSS** (avoids a stale SPA);
+  registered in `main.tsx` via `${import.meta.env.BASE_URL}sw.js`. The icon
+  generator script isn't in this repo. The SPA is served at web root (`/`).
+- **Offline banner:** `components/OfflineBanner.tsx`.
+- **AI loading states:** `components/ui/ai-progress.tsx` cycles plain statuses
+  with a capped bar; wired into every long AI call. Pass a **module-scope
+  (stable) `stages` array** so the timer isn't reset on render.
+- **Errors:** `fetchApi`/`fetchMultipart` turn network failures into a readable,
+  offline-aware `ApiError`; every AI flow has a Try again path.
+- **Touch targets:** `Button` ≥44px on touch (`md:` shrinks on desktop); a
+  `@media (pointer: coarse)` rule enforces 44px min-height on button-like
+  controls. Long text uses `break-words`; the content wrapper is
+  `overflow-x-hidden`.
+- **Dark mode:** `.dark` tokens exist in `index.css`, but nothing applies the
+  class yet — the app renders light only today.
 
-For cover letters / questions the resume passed to the model is the **latest
-approved tailored resume** for that job if one exists, else the base
-`resume_json`.
+## Smoke tests
 
-## Role-advice chat: attachments
+Run from the repo root with `pnpm --filter @workspace/api-server exec tsx test/<file>`:
+- `parseFixture.ts` — resume parser (no keys, no DB).
+- `docTest.ts` — docx/pdf generation.
+- `fetchTest.ts` — job page fetch + clean (network).
+- `polishTest.ts` — JSON retry + export; **uses the DB**.
+- `discoverTest.ts` — Discover tables + `normaliseSettings` + query building;
+  **uses the DB**.
 
-The chat accepts **file uploads** (interview invite, position description,
-assessment brief, screenshot…): images, PDF, `.docx`, `.txt`, `.md`, `.csv` —
-max 5 files, 15MB each (`lib/chatAttachments.ts`).
-
-**The server owns the transcript.** The client `POST`s only the new question +
-files as **multipart** (`message` + `files`) and gets the full transcript back;
-it does NOT send the history. That's what makes attachments persist: a
-follow-up turn re-sends the stored file, so the model still "sees" it.
-
-- **Images + PDFs** → stored in object storage (`objectKey`), re-fetched and
-  re-sent every turn as `image`/`document` content blocks (`buildTurnContent`).
-- **`.docx`/`.txt`/`.md`/`.csv`** → extracted to plain text at upload and inlined
-  (`docxToText` unzips `word/document.xml` and strips markup — we only need the
-  words here, unlike `resumeParser` which also captures run/style detail).
-- `ChatTurn` gained `attachments: ChatAttachment[]`; `chatComplete`'s
-  `ChatMessage.content` is now `string | unknown[]` (content blocks).
-- `publicTurn()` strips `objectKey`/extracted `text` before returning to the
-  client. `clearChat` also deletes the attachment objects. A failed AI call
-  deletes the just-uploaded objects so they aren't orphaned.
-- Attached files also flow into `formatCoachingNotes`, so an uploaded PD informs
-  future resume tailoring / cover letters for that role.
-
-## Role-advice chat (persisted + feeds generation)
-
-`RoleChat` (Job Detail) talks to the senior-recruiter persona about one role.
-`POST /jobs/:id/chat` `{ messages }` → `{ reply }` (Opus 4.8, `chatComplete`,
-`CHAT_SYSTEM`, grounded in posting + resume + extra answers). The transcript is
-**persisted server-side** after each reply as a `documents` row (`type: 'chat'`,
-`content_json = { messages }`, one per job) via `src/lib/chatStore.ts`
-(`loadChat`/`saveChat`/`clearChat`). `GET /jobs/:id/chat` returns the saved
-messages (RoleChat seeds from it on mount); `DELETE /jobs/:id/chat` clears it
-("New chat"). The saved chat is folded into **future generation for that role**:
-`formatCoachingNotes()` renders it into a conservative "PRIOR COACHING
-CONVERSATION" grounding block (guidance, not fact; never invent), threaded as an
-optional `coachingNotes` field into `runTailor`/`runCoverLetters`/
-`runAppQuestions` (from `loadTailorContext` in jobs.ts and `loadGenContext` in
-generate.ts). `loadGenContext` selects the newest `type='resume'` doc
-specifically, so the `chat`/`assessment`/cover docs never shadow the tailored
-resume.
-
-## Discover (web job search)
-
-Finds roles across company career sites + job boards, filtered to the user's
-parameters, with one-tap handoff into the tailoring pipeline.
-
-- **Parameters** (`discover_settings`, defaults in `discover.ts`
-  `DEFAULT_DISCOVER_SETTINGS`): `roleTitles[]` (Head of Product + equivalents),
-  `officeRegion` (Gold Coast↔Brisbane), `remoteRule` (full-time remote from
-  Australia), `exclusions[]` (junior/mid PM, <6-month contracts, relocation),
-  `extraKeywords`. `GET/PUT /discover/settings`. `normaliseSettings` validates
-  and fills defaults on both read and write.
-- **Search** (`POST /discover/search`): `buildQueryPlan` builds up to 10 lanes
-  (capped): general/company + careers/ATS + recruiter-agency lanes (big job
-  boards **and** LinkedIn excluded, so company/recruiter sites surface); a
-  **recruiter "we're hiring" shout-out lane** (boards excluded but **LinkedIn
-  allowed**); a **LinkedIn lane** (`includeDomains` LinkedIn) that catches
-  real postings (`/jobs/view/…`) and member hiring posts; an **ATS lane**
-  (`includeDomains` `ATS_DOMAINS` — greenhouse/lever/ashby/workable/
-  smartrecruiters/workday/bamboohr/recruitee/livehire/employmenthero/…) that
-  hits company career pages directly — companies host careers on ATS, so this is
-  the "look at Salesforce/Amazon/… careers" lane done via the platforms they
-  post on (live-tested ~20/20 direct postings); and a **named-recruiter lane**
-  (`includeDomains` `RECRUITER_DOMAINS` — Six Degrees Executive, Hays, Michael
-  Page, Hudson, Robert Walters, Robert Half, Talent Int'l, u&u, …). The two
-  include-lanes share query text but differ by domain, so plan de-dup keys on
-  query **+ includeDomains** (not text alone); lane cap is 12.
-  `isSearchOrIndexPage` drops search/category pages, recruiter
-  salary-guide/expertise/blog marketing pages, document files (.pdf/.docx/…),
-  and LinkedIn `/in`·`/company`·`/school` profile pages, but keeps `/jobs/view/`
-  and `/posts/`. The classifier is deliberately
-  lenient (default KEEP): it only discards clear non-postings/blogs/events and
-  CLEAR seniority/location breaches — ambiguous-location AU roles, recruiter
-  postings with no named employer, and LinkedIn hiring posts are kept as
-  `unsure`. Domain lists live in `discover.ts` (`JOB_BOARDS`, `SOCIAL`,
-  `LINKEDIN`, `GENERAL_EXCLUDE`, `HIRING_EXCLUDE`). `tavily.ts` runs them via the
-  **Tavily API**
-  (`search_depth: advanced`), merging + de-duping by URL. Dismissed URLs are
-  dropped, results de-duped by host+title, then classified in batches of 8 by
-  **`claude-sonnet-4-6`** (`DISCOVER_CLASSIFY_SYSTEM` in `prompts.ts`) which
-  returns per-result `company`/`location`/`work_arrangement`, `seniority_match`
-  and `location_match` (`yes`/`no`/`unsure`), and a one-line reason. Clear
-  non-matches are discarded; **`unsure` results are kept and flagged**, never
-  hidden. A final company+title de-dupe runs across batches. Response includes a
-  `counts` object and an indicative-coverage `note`.
-- **Actions** (frontend): "Tailor for this role" seeds `AddJobDialog`
-  (`JobSeed`) which auto-runs the Phase-3 extraction (paste fallback on a blocked
-  fetch) then navigates to the Job Detail tailoring flow. "Save" fetches the
-  posting (falling back to metadata only) and creates a `New` job. "Dismiss"
-  calls `POST /discover/dismiss` and hides the URL forever.
-- **De-dupe** happens at three points: Tavily URL merge, pre-classification
-  host+title, post-classification company+title.
-
-Non-AI smoke test (tables + `normaliseSettings` + `buildQueries`, no keys):
-`pnpm --filter @workspace/api-server exec tsx test/discoverTest.ts`.
-
-## PWA, mobile & resilience (polish)
-
-- **Installable PWA**: `public/manifest.webmanifest` (standalone, navy theme,
-  briefcase icons `icon-192/512.png` + `apple-touch-icon.png`), iOS/standalone
-  meta + `viewport-fit=cover` in `index.html`. A minimal service worker
-  (`public/sw.js`) makes it installable and serves `public/offline.html` for
-  navigations when offline — it deliberately does **not** cache app JS/CSS (avoids
-  a stale SPA). Registered in `main.tsx` via `${import.meta.env.BASE_URL}sw.js`.
-  Icons are produced by a dependency-free Node script kept in the local mirror
-  (`scripts-scratch/gen-icons.mjs`, run with `node gen-icons.mjs <publicDir>`) —
-  re-run it to regenerate. **The SPA is served at web root (`base = /`), so all
-  PWA files live at `/…`.** (`BASE_PATH` is a required build env var; the real
-  value is `/`. It also names the API prefix used by the frontend fetch layer.)
-- **Offline banner**: `components/OfflineBanner.tsx` (mounted in `App.tsx`) shows
-  a slim banner whenever `navigator.onLine` is false.
-- **AI loading states**: `components/ui/ai-progress.tsx` cycles plain-English
-  statuses ("Reading the posting…", "Comparing against your resume…") with a
-  capped progress bar. Wired into every long AI call (TailorFlow, CoverLetterFlow,
-  AppQuestions, Discover search) so a 20–60s call never shows a dead screen. Pass
-  a **module-scope (stable) `stages` array** so the timer isn't reset each render.
-- **Error handling**: frontend `fetchApi`/`fetchMultipart` convert network
-  failures into a readable, offline-aware `ApiError`; every AI flow has a
-  Try-again path. Backend: **all model JSON parsing retries once** on malformed
-  output before surfacing a clean `502` — `parseJsonWithRetry` + `opusJson` /
-  `createJson` in `anthropic.ts` (tailoring, cover letters, app questions, job
-  extraction, Discover classification). `AiJsonError` → 502 in `aiErrorResponse`.
-- **Mobile @390px**: `Button` tap targets are ≥44px on touch (`md:` shrinks them
-  on desktop); a `@media (pointer: coarse)` rule in `index.css` enforces a 44px
-  min-height on all button-like controls (min-height beats a smaller explicit
-  height). Long text uses `break-words`; the content wrapper is
-  `overflow-x-hidden`. **Job Detail has a mobile-only bottom action bar** fixed
-  above the tab bar (`bottom-[calc(4rem+env(safe-area-inset-bottom))]`) giving
-  one-tap résumé .docx/PDF + cover-letter/note actions.
-- **Data export**: `GET /profile/export` streams `war-room-backup-<date>.zip` —
-  a consistent `db.backup()` SQLite snapshot, a readable `data.json` dump of every
-  table, and every file under `uploads/`. Profile page → "Download all my data"
-  (same-origin authenticated link, `api.profile.getExportUrl()`).
-
-Non-AI smoke test (JSON retry + export zip):
-`pnpm --filter @workspace/api-server exec tsx test/polishTest.ts`.
-
-## Current status
-
-**Done:** Profile pipeline; Add-a-job; resume tailoring; **resume + cover-letter
-.docx/PDF generation**; **three cover-letter types**; **application-question
-helper**; **Discover web job search** (Tavily + AI screening, save/tailor/dismiss);
-**PWA + mobile polish** (installable, offline page, 44px targets, AI progress,
-JSON-retry, data export). `documents.docx_path`/`pdf_path` hold cached generated
-files.
-
-**Still stubbed:** `POST /jobs/:id/documents/generate` returns `501` (superseded
-by the tailoring/cover-letter approve flows). Discover search needs both
-`TAVILY_API_KEY` and `ANTHROPIC_API_KEY` set to return live results (otherwise
-`503`).
+The DB tests must only ever run against `warroom-dev`.
 
 ## Gotchas
 
-- Express 5: wildcard routes need `/{*splat}` syntax; async handlers should
-  be typed to return `Promise<void>` and use `res.status(...).json(...)`
-  followed by a bare `return;`, not `return res...`.
-- Never use `console.log` on the server — use `req.log` in route handlers or
-  the shared `logger` elsewhere.
-- The SQLite file and uploads directory are resolved via
-  `artifacts/api-server/src/lib/paths.ts`, which works whether the process
-  cwd is the repo root or the `api-server` package dir. Reuse it rather than
-  hardcoding paths.
-- All routes except `/api/healthz`, `/api/auth/login`, `/api/auth/status`,
-  `/api/auth/logout` require a valid PIN session cookie
-  (`requirePin` middleware in `routes/index.ts`).
+- **Express 5:** wildcard routes need `/{*splat}`; async handlers return
+  `Promise<void>` and use `res.status(...).json(...)` then a bare `return;`.
+- **Never `console.log` on the server** — use `req.log` in handlers, `logger`
+  elsewhere.
+- **Casing:** Drizzle rows are camelCase; the frontend expects snake_case.
+  Every response that returns a row needs the serialiser — check sibling routes,
+  not just the one being edited (a missed one once blanked the Jobs page with no
+  server error).
+- **Autoscale has ephemeral disk:** never write durable data to local disk in
+  production (no SQLite, no local `uploads/`). Use Postgres + Object Storage.
+  Never commit database snapshots (`*.db`, `*.sqlite`).
+- **Two resume renderers:** the docx path (→ LibreOffice → PDF) and the pdf-lib
+  fallback share no layout code; layout/pagination changes go in **both**. In
+  `pdf.ts`, "keep together" is a `groupId` on `Block`.
+- **Fonts under LibreOffice** resolve against what's installed (`fc-list`); the
+  Replit container ships DejaVu only, so a requested "Calibri" is silently
+  substituted. Force the exact installed family when overriding fonts.
+- **First LibreOffice conversion is slow** (~30s+); use 60–90s timeouts in
+  tests.
+- **wouter:** use `<Switch>/<Route>` for any route that needs `useParams()`;
+  hand-rolled `location.startsWith()` routing returns empty params.
+- **sonner Toaster:** the shadcn `ui/sonner.tsx` calls `next-themes`'
+  `useTheme()`; without a `ThemeProvider` it crashes silently. Make sure the
+  mounted `<Toaster />` matches the `toast` import used by pages.
+- **Long AI calls** need a progress state (20–60s is normal for Opus).
+- `express.json` limit is 2mb (resume JSON + style map exceed the default).
+- `artifacts/api-server/data/app.db`, `attached_assets/` and `exports/` are
+  leftovers from the SQLite era and Replit uploads; nothing at runtime reads
+  them (the Vite `@assets` alias points at `attached_assets/` but no code
+  imports from it). M0 stops tracking them.

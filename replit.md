@@ -1,10 +1,12 @@
 # Job Search Assistant
 
+> **Full detail lives in [`CLAUDE.md`](CLAUDE.md)** (stack, data model, flows, AI content rules, working rules, gotchas). The build plan is [`docs/build-plan.md`](docs/build-plan.md). This file is a short summary for Replit.
+
 Personal (single-user) job search "war room" — track job postings, tailor resumes and cover letters with AI, and generate application answers, all backed by a PIN-gated web app.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/api-server run dev` — run the API server (port 8080)
 - `pnpm --filter @workspace/job-search-assistant run dev` — run the web frontend
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
@@ -52,7 +54,7 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 - This app deploys to `autoscale` — never write durable data to local disk (no local SQLite files, no local `uploads/` dir). Use Postgres (`@workspace/db`) and Object Storage (`src/lib/objectStore.ts`) instead.
 - Do not commit database snapshot files (e.g. `*.db`, `*.sqlite`) to git — a committed snapshot resets production data on every redeploy. `artifacts/api-server/data/` and `artifacts/api-server/uploads/` are gitignored for this reason.
-- After changing `lib/db/src/schema/*`, run `pnpm --filter @workspace/db run push` to apply the change to Postgres.
+- No schema changes without asking first (see CLAUDE.md). `scripts/post-merge.sh` runs `pnpm --filter db push`, so a schema edit merged to `main` reaches the production database.
 
 ## Pointers
 
