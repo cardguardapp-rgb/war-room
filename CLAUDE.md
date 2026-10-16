@@ -76,7 +76,9 @@ The plan of work lives in `docs/build-plan.md` (milestones M0–M8).
   `127.0.0.1:1106`), wrapped by `artifacts/api-server/src/lib/objectStore.ts`
   (`newObjectKey`, `uploadObject`, `downloadObject`, `objectExists`,
   `deleteObject`). Keys are relative to `PRIVATE_OBJECT_DIR`. Nothing durable is
-  written to local disk.
+  written to local disk in production. **Locally** (no `REPL_ID` and nothing on
+  the sidecar port) the same functions use a local-disk driver rooted at
+  `<repo>/.local-storage/` (gitignored), keyed identically.
 - **AI:** `@anthropic-ai/sdk` (Claude). Web search for Discover: Tavily API.
 - **API contract:** plain REST + `fetch` in
   `artifacts/job-search-assistant/src/lib/api.ts` (`fetchApi` /
@@ -110,16 +112,40 @@ The plan of work lives in `docs/build-plan.md` (milestones M0–M8).
   (build then run; no watch). Needs `PORT`.
 - Web `dev` = `vite --host 0.0.0.0`. `vite.config.ts` **requires `PORT` and
   `BASE_PATH`** and throws without them. `runtimeErrorOverlay` (a Replit plugin)
-  is always on; `cartographer` and `dev-banner` load only when `REPL_ID` is set.
-  There is no `/api` dev proxy yet.
+  and all three Replit plugins (`runtimeErrorOverlay`, `cartographer`,
+  `dev-banner`) load only when `REPL_ID` is set. `DEV_HTTPS=1` adds
+  `@vitejs/plugin-basic-ssl` (self-signed https); `API_PORT` adds an `/api` →
+  `http://localhost:$API_PORT` proxy. Both are local-only and set by `dev:phone`.
 - Root: `pnpm run typecheck`, `pnpm run build`.
 - `lib/db`: `push` / `push-force` (drizzle-kit). **Don't run them** (no schema
   changes; never against production).
 
-**Locally (Windows):** M0 adds `.env` loading in development (server and
-drizzle config), a Vite `/api` proxy, `dev:phone`, a local-disk storage driver
-used when the Replit sidecar isn't present, and the backup-import script. Until
-M0 is done the app does not run locally.
+**Locally (Windows):**
+- `.env` at the repo root (template: `.env.example`) is loaded by
+  `lib/db/src/env.ts` (`loadLocalEnv`, Node's `process.loadEnvFile`) **only when
+  not on Replit and `NODE_ENV !== "production"`**; variables already set win.
+  The API imports `@workspace/db/env` as the **first import** of `index.ts`;
+  `lib/db/src/index.ts` and `drizzle.config.ts` load it too.
+- **DB guard:** locally, `assertLocalDatabase` refuses any `DATABASE_URL` whose
+  database name isn't `warroom-dev` (server, smoke tests, drizzle-kit). A fresh
+  warroom-dev gets its tables from `pnpm --filter @workspace/db push` (guarded).
+- `pnpm run dev:phone` (`scripts/dev-phone.mjs`): API on **8090** (its pnpm `dev`
+  script), Vite on **5175** over self-signed https with `/api` proxied to 8090,
+  then prints `War Room dev ready` plus the laptop and LAN URLs. Ctrl+C stops
+  both. Vite is launched directly with Node because Git Bash (the pnpm script
+  shell) rewrites `BASE_PATH=/` into `C:/Program Files/Git/`.
+- **Backup import:** `pnpm --filter @workspace/api-server run import-backup
+  "<zip>" [--replace]` (`artifacts/api-server/scripts/importBackup.ts`). Local
+  and warroom-dev only (checks the URL and `current_database()`); refuses a
+  non-empty DB unless `--replace` (truncates first). Preserves ids
+  (`OVERRIDING SYSTEM VALUE`), resets the sequences, writes `files/<key>` into
+  `.local-storage/<key>`. Chat attachments and the website config aren't in the
+  export, so old attachments won't re-send and Website starts from defaults.
+- PDF: set `SOFFICE_PATH` to use LibreOffice; otherwise downloads use the pdf-lib
+  fallback. `test/docTest.ts` calls LibreOffice directly, so it needs it.
+- `pnpm-workspace.yaml` overrides strip non-Linux native binaries; the
+  `win32-x64` ones (esbuild, rollup, tailwind oxide, lightningcss) are allowed so
+  the tooling runs on Windows. Don't re-add those exclusions.
 
 ## Environment variables
 
@@ -614,4 +640,4 @@ The DB tests must only ever run against `warroom-dev`.
 - `artifacts/api-server/data/app.db`, `attached_assets/` and `exports/` are
   leftovers from the SQLite era and Replit uploads; nothing at runtime reads
   them (the Vite `@assets` alias points at `attached_assets/` but no code
-  imports from it). M0 stops tracking them.
+  imports from it). Since M0 they're untracked and gitignored (still on disk).

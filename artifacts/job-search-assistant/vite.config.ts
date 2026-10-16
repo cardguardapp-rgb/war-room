@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import basicSsl from "@vitejs/plugin-basic-ssl";
 
 const rawPort = process.env.PORT;
 
@@ -26,14 +27,21 @@ if (!basePath) {
   );
 }
 
+const onReplit = process.env.REPL_ID !== undefined;
+
+// Local development only (set by `pnpm run dev:phone`): self-signed https so
+// the phone can reach the dev server, and /api proxied to the local API server.
+const devHttps = process.env.DEV_HTTPS === "1";
+const apiPort = process.env.API_PORT;
+
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
+    ...(onReplit ? [runtimeErrorOverlay()] : []),
+    ...(devHttps ? [basicSsl()] : []),
+    ...(process.env.NODE_ENV !== "production" && onReplit
       ? [
           await import("@replit/vite-plugin-cartographer").then((m) =>
             m.cartographer({
@@ -66,6 +74,13 @@ export default defineConfig({
     fs: {
       strict: true,
     },
+    ...(apiPort
+      ? {
+          proxy: {
+            "/api": { target: `http://localhost:${apiPort}`, changeOrigin: true },
+          },
+        }
+      : {}),
   },
   preview: {
     port,

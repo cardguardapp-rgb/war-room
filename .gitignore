@@ -47,3 +47,16 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local development (M0)
+.env
+.env.*
+!.env.example
+.local-storage/
+
+# Leftovers from the SQLite era and Replit uploads (kept on disk, not tracked)
+artifacts/api-server/data/app.db
+*.db
+*.sqlite
+attached_assets/
+exports/
