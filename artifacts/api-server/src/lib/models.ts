@@ -16,11 +16,14 @@ export type AiTask =
   | "website"
   | "skillGrouping"
   | "interviewPrep"
+  | "mock"
   | "chatCompare";
 
 interface ModelSetting {
   env: string;
   fallback: string;
+  /** When set, an unset env var falls back to this task's model (env or default). */
+  inherits?: AiTask;
   /** What the task is, for the startup log. */
   label: string;
 }
@@ -42,16 +45,20 @@ export const MODEL_SETTINGS: Record<AiTask, ModelSetting> = {
   skillGrouping: { env: "AI_MODEL_SKILL_GROUPING", fallback: "claude-sonnet-4-6", label: "skill grouping" },
   // Interview prep pack: stories, likely questions, gaps, questions to ask.
   interviewPrep: { env: "AI_MODEL_INTERVIEW_PREP", fallback: "claude-opus-4-8", label: "interview prep pack" },
+  // Mock interview (questions + feedback): the coach, so unset follows AI_MODEL_CHAT.
+  mock: { env: "AI_MODEL_MOCK", fallback: "claude-opus-4-8", inherits: "chat", label: "mock interview" },
   // Dev only: the faster model the side-by-side compares the coach against.
   chatCompare: { env: "AI_MODEL_CHAT_COMPARE", fallback: "claude-sonnet-5-5", label: "chat compare (dev only)" },
 };
 
-function resolve(task: AiTask): { model: string; source: "env" | "default" } {
+function resolve(task: AiTask): { model: string; source: string } {
   const setting = MODEL_SETTINGS[task];
   const fromEnv = process.env[setting.env]?.trim();
-  return fromEnv
-    ? { model: fromEnv, source: "env" }
-    : { model: setting.fallback, source: "default" };
+  if (fromEnv) return { model: fromEnv, source: "env" };
+  if (setting.inherits) {
+    return { model: resolve(setting.inherits).model, source: `same as ${MODEL_SETTINGS[setting.inherits].env}` };
+  }
+  return { model: setting.fallback, source: "default" };
 }
 
 /** The model for a task, logged each time it's used. */

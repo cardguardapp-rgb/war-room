@@ -172,6 +172,21 @@ async function fetchEventStream(
   }
 }
 
+/** POST JSON, stream "text" events to onText, resolve with the saved document. */
+async function mockStream(path: string, body: unknown, onText: (text: string) => void): Promise<Document> {
+  let doc: Document | null = null;
+  await fetchEventStream(
+    path,
+    { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } },
+    (e) => {
+      if (e.event === "text") onText(e.data.text);
+      else if (e.event === "done") doc = e.data.document;
+    },
+  );
+  if (!doc) throw new ApiError(0, "The reply was cut off. Check your connection and try again.");
+  return doc;
+}
+
 export type JobStatus =
   | 'New'
   | 'Tailoring'
@@ -345,10 +360,41 @@ export interface InterviewPrep {
   questions_to_ask: PrepAsk[];
 }
 
+// Mock interview (one `mock_interview` document per session).
+export interface MockPlanItem {
+  question_id: string;
+  question: string;
+  story_id: string;
+}
+
+export interface MockTurn {
+  asked: string;
+  answer: string;
+  answer_seconds: number | null;
+  answer_words: number | null;
+  feedback: string;
+}
+
+export interface MockInterview {
+  version: 1;
+  status: 'in_progress' | 'finished';
+  started_at: string;
+  finished_at: string | null;
+  plan: MockPlanItem[];
+  turns: MockTurn[];
+}
+
+/** A short-lived AssemblyAI streaming URL (token included); add sample_rate. */
+export interface SpeechToken {
+  ws_url: string;
+  expires_in_seconds: number;
+  max_session_seconds: number;
+}
+
 export interface Document {
   id: number;
   job_id: number;
-  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' | 'assessment' | 'chat' | 'interview_prep';
+  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' | 'assessment' | 'chat' | 'interview_prep' | 'mock_interview';
   content_json: any;
   docx_object_key: string | null;
   pdf_object_key: string | null;
@@ -591,6 +637,21 @@ export const api = {
     interviewPrepGenerate: (id: number) => fetchApi<Document>(`/jobs/${id}/interview-prep`, { method: "POST" }),
     interviewPrepSave: (id: number, pack: InterviewPrep) =>
       fetchApi<Document>(`/jobs/${id}/interview-prep`, { method: "PUT", body: JSON.stringify({ pack }) }),
+    // Mock interview: the coach's question and feedback stream in through onText;
+    // each resolves with the saved session document.
+    mockStart: (id: number, count: number) =>
+      fetchApi<Document>(`/jobs/${id}/mock-interviews`, { method: "POST", body: JSON.stringify({ count }) }),
+    mockNext: (id: number, docId: number, onText: (text: string) => void) =>
+      mockStream(`/jobs/${id}/mock-interviews/${docId}/next`, {}, onText),
+    mockAnswer: (id: number, docId: number, answer: string, seconds: number | null, onText: (text: string) => void) =>
+      mockStream(`/jobs/${id}/mock-interviews/${docId}/answer`, { answer, seconds }, onText),
+    mockFinish: (id: number, docId: number) =>
+      fetchApi<Document>(`/jobs/${id}/mock-interviews/${docId}/finish`, { method: "POST" }),
+    mockDelete: (id: number, docId: number) =>
+      fetchApi<void>(`/jobs/${id}/mock-interviews/${docId}`, { method: "DELETE" }),
+  },
+  speech: {
+    token: () => fetchApi<SpeechToken>("/speech/token", { method: "POST" }),
   },
   documents: {
     list: (jobId: number) => fetchApi<Document[]>(`/jobs/${jobId}/documents`),

@@ -34,6 +34,7 @@ import { TailorFlow } from "@/components/jobs/TailorFlow";
 import { CoverLetterFlow } from "@/components/jobs/CoverLetterFlow";
 import { AppQuestions } from "@/components/jobs/AppQuestions";
 import { InterviewPrep } from "@/components/jobs/InterviewPrep";
+import { MockInterview } from "@/components/jobs/MockInterview";
 import { RoleChat } from "@/components/jobs/RoleChat";
 import { CopyButton } from "@/components/jobs/CopyButton";
 
@@ -70,6 +71,7 @@ const docTypeLabels: Record<Document["type"], string> = {
   assessment: "Fit assessment",
   chat: "Advice chat",
   interview_prep: "Interview prep",
+  mock_interview: "Mock interview",
 };
 
 function contentText(doc: Document): string {
@@ -111,6 +113,9 @@ export default function JobDetail() {
   const noteDoc = documents?.find((d) => d.type === "cover_note");
   const assessmentDoc = documents?.find((d) => d.type === "assessment");
   const prepDoc = documents?.find((d) => d.type === "interview_prep");
+  const mockDocs = (documents ?? [])
+    .filter((d) => d.type === "mock_interview")
+    .sort((a, b) => b.id - a.id);
   const hasQuickActions = !!(resumeDoc || coverDoc || noteDoc);
 
   if (jobLoading) {
@@ -139,7 +144,12 @@ export default function JobDetail() {
 
   // Once there's an interview, prep is the section that matters most.
   const prepFirst = job.status === "Interview" || job.status === "Offer";
-  const prepSection = <InterviewPrep job={job} doc={prepDoc} />;
+  const prepSection = (
+    <>
+      <InterviewPrep job={job} doc={prepDoc} />
+      <MockInterview job={job} prepDoc={prepDoc} sessions={mockDocs} />
+    </>
+  );
 
   const handleStatusChange = (status: string) => {
     updateJob.mutate(
@@ -370,9 +380,9 @@ export default function JobDetail() {
           <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <h3 className="font-semibold text-lg mb-4">Documents</h3>
             {(() => {
-              // The assessment, the saved chat and the prep pack have their own sections; they aren't files.
+              // The assessment, the saved chat, the prep pack and mock interviews have their own sections; they aren't files.
               const fileDocs = (documents ?? []).filter(
-                (d) => d.type !== "assessment" && d.type !== "chat" && d.type !== "interview_prep",
+                (d) => !["assessment", "chat", "interview_prep", "mock_interview"].includes(d.type),
               );
               return fileDocs.length === 0 ? (
               <div className="text-center py-8 border border-dashed border-border rounded-xl bg-muted/20">

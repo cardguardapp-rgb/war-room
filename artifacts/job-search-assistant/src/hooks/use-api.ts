@@ -381,3 +381,62 @@ export function useDismissDiscover() {
     mutationFn: (url: string) => api.discover.dismiss(url),
   });
 }
+
+// Mock interview sessions. Each call returns the saved session document, which
+// replaces the cached copy (by id) so the session screen never flashes back.
+function usePutMockDoc(jobId: number) {
+  const queryClient = useQueryClient();
+  return (doc: Document) => {
+    queryClient.setQueryData<Document[]>(queryKeys.documents(jobId), (docs) =>
+      docs ? [doc, ...docs.filter((d) => d.id !== doc.id)] : [doc],
+    );
+  };
+}
+
+export function useStartMock(jobId: number) {
+  const putDoc = usePutMockDoc(jobId);
+  return useMutation({
+    mutationFn: (count: number) => api.jobs.mockStart(jobId, count),
+    onSuccess: putDoc,
+  });
+}
+
+/** The coach puts the next question; it streams in through `onText`. */
+export function useMockNext(jobId: number) {
+  const putDoc = usePutMockDoc(jobId);
+  return useMutation({
+    mutationFn: (v: { docId: number; onText: (text: string) => void }) =>
+      api.jobs.mockNext(jobId, v.docId, v.onText),
+    onSuccess: putDoc,
+  });
+}
+
+/** Send an answer; the coach's feedback streams in through `onText`. */
+export function useMockAnswer(jobId: number) {
+  const putDoc = usePutMockDoc(jobId);
+  return useMutation({
+    mutationFn: (v: { docId: number; answer: string; seconds: number | null; onText: (text: string) => void }) =>
+      api.jobs.mockAnswer(jobId, v.docId, v.answer, v.seconds, v.onText),
+    onSuccess: putDoc,
+  });
+}
+
+export function useFinishMock(jobId: number) {
+  const putDoc = usePutMockDoc(jobId);
+  return useMutation({
+    mutationFn: (docId: number) => api.jobs.mockFinish(jobId, docId),
+    onSuccess: putDoc,
+  });
+}
+
+export function useDeleteMock(jobId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (docId: number) => api.jobs.mockDelete(jobId, docId),
+    onSuccess: (_res, docId) => {
+      queryClient.setQueryData<Document[]>(queryKeys.documents(jobId), (docs) =>
+        docs?.filter((d) => d.id !== docId),
+      );
+    },
+  });
+}

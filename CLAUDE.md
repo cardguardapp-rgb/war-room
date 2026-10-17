@@ -164,6 +164,7 @@ Names only — values live in `.env` (local) and Replit Secrets (production).
 | `REPLIT_DOMAINS`, `REPLIT_DEV_DOMAIN` | `httpSecurity.ts` | Set by Replit; added to the CORS allowlist |
 | `ANTHROPIC_API_KEY` | `anthropic.ts` | Missing → AI endpoints return 503; the rest works |
 | `TAVILY_API_KEY` | `tavily.ts` | Missing → `POST /discover/search` returns 503 |
+| `ASSEMBLYAI_API_KEY` | `lib/speech.ts` | Server only; mints short-lived streaming tokens. Missing → `POST /speech/token` returns 503 (mock interview can still be typed) |
 | `PRIVATE_OBJECT_DIR` | `objectStore.ts` | `/<bucket>/<dir>`; Replit provisions it (with `PUBLIC_OBJECT_SEARCH_PATHS`, `DEFAULT_OBJECT_STORAGE_BUCKET_ID`, which the code doesn't read) |
 | `PORT` | API `index.ts`, `vite.config.ts` | Required by both |
 | `BASE_PATH` | `vite.config.ts` | Required; real value `/` |
@@ -172,7 +173,7 @@ Names only — values live in `.env` (local) and Replit Secrets (production).
 | `LOG_LEVEL`, `NODE_ENV` | logger, cookies | |
 
 The optional `AI_MODEL_*` variables (M2) are listed under "Models and prompts";
-unset means the default. Later milestones add the AssemblyAI key (M4).
+unset means the default.
 
 ## Folder structure
 
@@ -200,6 +201,8 @@ artifacts/api-server/
       coverLetters.ts       # cover letters (full + short; plain = full.body)
       appQuestions.ts       # application-question answers (resume-grounded only)
       interviewPrep.ts      # interview prep pack (M3): runInterviewPrep, normaliseInterviewPrep
+      mockInterview.ts      # mock interview sessions (M4): plan, stages, coach conversation, normaliser
+      speech.ts             # AssemblyAI streaming token minting (M4); the key never leaves the server
       chatStore.ts          # role chat persistence; formatCoachingNotes()
       chatAttachments.ts    # chat upload ingest (images/PDF → object storage; docx/txt/md/csv → text)
       docBuild.ts           # resume + cover-letter .docx builders (docx package)
@@ -218,7 +221,8 @@ artifacts/api-server/
       profile.ts            # profile GET/PATCH; resume parse/confirm/download; GET /profile/export
       jobs.ts               # job CRUD; extract / extract-image; assess; tailor/qa/finalize/revise/approve
       documents.ts          # list; regenerate; download docx|pdf (lazy build + cache)
-      generate.ts           # role chat (streamed) + dev-only compare; cover letters; application questions; interview prep
+      generate.ts           # role chat (streamed) + dev-only compare; cover letters; application questions; interview prep; mock interview
+      speech.ts             # POST /speech/token (behind the PIN)
       discover.ts           # settings, search, dismiss
       website.ts            # personal website config, AI draft/write, preview, export zip
   test/                     # tsx smoke scripts (see "Smoke tests")
@@ -226,8 +230,10 @@ artifacts/api-server/
 artifacts/job-search-assistant/src/
   AppRouter.tsx             # wouter <Switch>: / and /jobs, /jobs/:id, /profile, /discover, /website
   lib/api.ts                # every API call + shared types (mirror of server shapes)
+  lib/speech.ts             # mic → AudioWorklet → 16-bit PCM → AssemblyAI WebSocket (startTranscriber)
+  lib/voice.ts              # browser speech for questions (en-AU voice, then en-GB, then any English)
   pages/                    # jobs, job-detail, profile, discover, website, login, not-found
-  components/jobs/          # AddJobDialog, TailorFlow, ResumeDiff, CoverLetterFlow, AppQuestions, RoleChat, ChatCompare (dev only), CopyButton, InterviewPrep
+  components/jobs/          # AddJobDialog, TailorFlow, ResumeDiff, CoverLetterFlow, AppQuestions, RoleChat, ChatCompare (dev only), CopyButton, InterviewPrep, MockInterview
   components/InfoTip.tsx    # the (i) tooltip (a popover, so it opens on tap) — the only place help text goes
   components/profile/       # ResumeReview, ExtraAnswers, AdditionalContext, resumeDraft
   components/discover/      # SettingsEditor, ResultCard
@@ -265,8 +271,10 @@ returns **snake_case** (see `serialize.ts` and the per-route serialisers).
   - `chat` — role-chat transcript `{ messages }`, one per job
   - `interview_prep` — interview prep pack `{ stories, questions, gaps,
     questions_to_ask }`, one per job (see "Interview prep pack")
+  - `mock_interview` — one per mock interview session, many per job (see
+    "Mock interview")
   **New kinds of data go here** (new `type` + `content_json`). Planned:
-  `mock_interview` (M4), `interview` (M7).
+  `interview` (M7).
 - **`qa_log`** — question/answer pairs per job (FK cascade).
 - **`discover_settings`** — single row `id = 1`, `settings_json`. Absent → defaults.
 - **`discover_dismissed`** — one row per dismissed URL (`url` primary key).
@@ -392,6 +400,7 @@ lists all of them. **Ask Amy before changing a default.**
 | `website` | `AI_MODEL_WEBSITE` | `claude-opus-4-8` | Personal-website copy |
 | `skillGrouping` | `AI_MODEL_SKILL_GROUPING` | `claude-sonnet-4-6` | Grouping skills for the .docx layout |
 | `interviewPrep` | `AI_MODEL_INTERVIEW_PREP` | `claude-opus-4-8` | Interview prep pack (`opusJson`) |
+| `mock` | `AI_MODEL_MOCK` | same as `chat` | Mock interview questions + feedback. Unset follows whatever `AI_MODEL_CHAT` resolves to (logged as `source: "same as AI_MODEL_CHAT"`) |
 | `chatCompare` | `AI_MODEL_CHAT_COMPARE` | `claude-sonnet-5-5` | **Dev only:** the side-by-side model (see the chat flow) |
 
 `opusJson` and `chatComplete` take the model as a required argument (no
@@ -409,7 +418,8 @@ checks and the JSON contract), `COVER_LETTER_SYSTEM`, `APP_QUESTIONS_SYSTEM`,
 `CHAT_SYSTEM` (**do not change without asking**), `WEBSITE_DRAFT_SYSTEM`,
 `WEBSITE_FIELD_SYSTEM`, `SKILL_GROUPING_SYSTEM`, `DISCOVER_CLASSIFY_SYSTEM`,
 `INTERVIEW_PREP_SYSTEM` (a standalone generation prompt, not built on
-`CHAT_SYSTEM`).
+`CHAT_SYSTEM`), `MOCK_INTERVIEW_MODE` (a mode instruction appended after
+`CHAT_SYSTEM` + grounding, never a replacement).
 
 ## Pages (frontend)
 
@@ -598,6 +608,49 @@ product requirement; don't replace it with a hamburger menu.
   link jumps to that story. Every item has edit/delete, each list has "Add".
   Regenerate asks first because it replaces edits.
 
+### Mock interview (M4)
+- **Mock interview** section on Job Detail (`MockInterview.tsx`), directly
+  after Interview prep. Needs a prep pack with questions. Start picks 3/5/8 pack
+  questions at random (`planFromPack`); past sessions are listed (newest first)
+  and reopen to continue or review; each can be deleted.
+- **The coach:** `CHAT_SYSTEM` (unchanged) + the role grounding
+  (`buildChatSystem`) + `MOCK_INTERVIEW_MODE` + the prep pack JSON
+  (`mockSystemSuffix`), one cached system prompt, model `aiModel("mock")`. The
+  session's turns are the conversation (`mockMessages`): `[APP] Put question n
+  of m: "…"` → the coach's spoken question → `[ANSWER] (seconds, words)` →
+  feedback (Structure / Specificity / Length / Story, then "Next time:"). Logs
+  `"Mock interview reply"` with `step`, timing and cache tokens.
+- **Endpoints** (all under `requirePin`):
+  `POST /jobs/:id/mock-interviews` `{ count }` → 201 session document;
+  `POST …/:docId/next` (SSE `text` / `done { document }`) puts the next
+  question, or returns the saved one with no model call if it's still
+  unanswered; `POST …/:docId/answer` `{ answer, seconds }` (SSE) saves the
+  answer **before** the AI call (retry-safe), streams feedback, and finishes the
+  session after the last question; `POST …/:docId/finish` ends early (drops an
+  asked-but-unanswered question); `DELETE …/:docId`. Wrong stage → 409.
+- **Shape** (`normaliseMockInterview`): `{ version: 1, status: in_progress |
+  finished, started_at, finished_at, plan[] { question_id, question, story_id },
+  turns[] { asked, answer, answer_seconds, answer_words, feedback } }`;
+  `turns[i]` answers `plan[i]`. Answers capped at 20,000 characters.
+- **Speech-to-text:** AssemblyAI **Universal Streaming v3**, model
+  `universal-3-6-pro`. `POST /speech/token` mints a token server-side
+  (`GET https://streaming.assemblyai.com/v3/token`, redeem window 60s, session
+  cap 900s) and returns only `{ ws_url (token inside), expires_in_seconds,
+  max_session_seconds }`; the key and the token are never logged. The browser
+  (`lib/speech.ts`) opens `wss://streaming.assemblyai.com/v3/ws?…&token=…&
+  sample_rate=<AudioContext rate>`, streams `pcm_s16le` in 100ms chunks from an
+  AudioWorklet (inline Blob module), joins every `Turn` by `turn_order` (latest
+  transcript wins; `end_of_turn` marks it final), and on Done sends
+  `{"type":"Terminate"}` and waits up to 4s for `Termination` so the last words
+  land. One speech session per answer (billing is per open second). A dropped
+  connection keeps what was heard and switches to the typed box.
+- **Questions aloud:** `lib/voice.ts` (Web Speech API) picks an `en-AU` voice,
+  then `en-GB`, then any English, preferring Natural/Online/Google voices; the
+  (i) next to the question count shows which voice is in use. "Type instead" is
+  always available (sent without a duration).
+- **Mic permission:** `Permissions-Policy: microphone=(self)` on API and Vite
+  responses; the mic needs https (so `dev:phone` for the Fold6).
+
 ### Discover (web job search)
 - **Parameters** (`discover_settings`, defaults `DEFAULT_DISCOVER_SETTINGS` in
   `discover.ts`): `roleTitles[]`, `officeRegion` (Gold Coast↔Brisbane),
@@ -709,6 +762,11 @@ Run from the repo root with `pnpm --filter @workspace/api-server exec tsx test/<
   origin rules (no keys, no DB; sets its own throwaway PIN and secret).
 - `parseFixture.ts` — resume parser (no keys, no DB).
 - `interviewPrepTest.ts` — interview prep pack normaliser (no keys, no DB).
+- `mockInterviewTest.ts` — mock interview plan/stages/conversation/normaliser
+  and `AI_MODEL_MOCK` falling back to the chat model (no keys, no DB).
+- `speechTest.ts` — mints an AssemblyAI token and opens/terminates a streaming
+  session with 1s of silence (needs `ASSEMBLYAI_API_KEY` + network; skips
+  without the key; prints no secrets).
 - `docTest.ts` — docx/pdf generation.
 - `fetchTest.ts` — job page fetch + clean (network).
 - `polishTest.ts` — JSON retry + export; **uses the DB**.

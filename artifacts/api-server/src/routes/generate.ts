@@ -17,6 +17,19 @@ import {
   type InterviewPrep,
 } from "../lib/interviewPrep";
 import {
+  cleanAnswer,
+  MOCK_COUNTS,
+  MOCK_INTERVIEW_TYPE,
+  mockMessages,
+  mockStage,
+  mockSystemSuffix,
+  newMockInterview,
+  normaliseMockInterview,
+  planFromPack,
+  wordCount,
+  type MockInterview,
+} from "../lib/mockInterview";
+import {
   clearChat,
   formatCoachingNotes,
   loadChat,
@@ -660,6 +673,270 @@ router.put("/jobs/:id/interview-prep", async (req, res): Promise<void> => {
   }
   const row = await savePrep(id, normaliseInterviewPrep(pack));
   res.json(serializeDocument(row));
+});
+
+// --- Mock interview ------------------------------------------------------
+//
+// The coach (CHAT_SYSTEM unchanged + this role's grounding + the mock mode
+// instruction + the prep pack) asks pack questions one at a time and streams
+// feedback on each answer. The browser speaks the question and transcribes the
+// answer (AssemblyAI, via /speech/token); this side only sees text.
+
+/** The job's prep pack, or null if there isn't one with questions. */
+async function loadPrepPack(jobId: number): Promise<InterviewPrep | null> {
+  const [doc] = await db
+    .select()
+    .from(documentsTable)
+    .where(and(eq(documentsTable.jobId, jobId), eq(documentsTable.type, INTERVIEW_PREP_TYPE)))
+    .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id))
+    .limit(1);
+  if (!doc) return null;
+  const pack = normaliseInterviewPrep(doc.contentJson);
+  return pack.questions.length > 0 ? pack : null;
+}
+
+/** Load one mock session belonging to this job, or answer 400/404 and return null. */
+async function loadMockSession(
+  req: Request,
+  res: Response,
+): Promise<{ jobId: number; docId: number; session: MockInterview } | null> {
+  const jobId = parseId(req.params.id);
+  const docId = parseId(req.params.docId);
+  if (jobId === null || docId === null) {
+    res.status(400).json({ error: "Invalid id" });
+    return null;
+  }
+  const [doc] = await db
+    .select()
+    .from(documentsTable)
+    .where(
+      and(
+        eq(documentsTable.id, docId),
+        eq(documentsTable.jobId, jobId),
+        eq(documentsTable.type, MOCK_INTERVIEW_TYPE),
+      ),
+    );
+  if (!doc) {
+    res.status(404).json({ error: "Mock interview not found" });
+    return null;
+  }
+  return { jobId, docId, session: normaliseMockInterview(doc.contentJson) };
+}
+
+async function saveMockSession(docId: number, session: MockInterview) {
+  const [row] = await db
+    .update(documentsTable)
+    .set({ contentJson: session })
+    .where(eq(documentsTable.id, docId))
+    .returning();
+  return row;
+}
+
+/**
+ * Stream one coach reply for the session (the question, or feedback on the
+ * latest answer), then save it with `apply`. Streams "text" { text } then
+ * "done" { document } (or "error"); plain JSON without the SSE header.
+ */
+async function streamMockReply(
+  req: Request,
+  res: Response,
+  opts: {
+    jobId: number;
+    docId: number;
+    session: MockInterview;
+    next: { kind: "ask" | "answer"; index: number };
+    maxTokens: number;
+    apply: (session: MockInterview, reply: string) => MockInterview;
+  },
+): Promise<void> {
+  const ctx = await loadGenContext(opts.jobId, res);
+  if (!ctx) return;
+  const pack = await loadPrepPack(opts.jobId);
+  if (!pack) {
+    res.status(400).json({ error: "Generate the interview prep pack first." });
+    return;
+  }
+  const sse = wantsEventStream(req) ? openSse(req, res) : null;
+  try {
+    const model = aiModel("mock");
+    const result = await streamChat({
+      model,
+      extraParams: chatModelParams(model),
+      system: buildChatSystem(ctx.job, ctx.resumeJson, ctx.extraAnswers) + mockSystemSuffix(pack),
+      messages: mockMessages(opts.session, opts.next),
+      maxTokens: opts.maxTokens,
+      onText: (text) => sse?.send("text", { text }),
+    });
+    const { text: _text, ...timing } = result;
+    req.log.info(
+      { jobId: opts.jobId, docId: opts.docId, step: opts.next.kind, index: opts.next.index, ...timing },
+      "Mock interview reply",
+    );
+    const reply = result.text.trim();
+    if (!reply) throw new Error("The coach didn't reply. Please try again.");
+    const row = await saveMockSession(opts.docId, opts.apply(opts.session, reply));
+    const body = { document: serializeDocument(row) };
+    if (sse) {
+      sse.send("done", body);
+      sse.close();
+    } else {
+      res.json(body);
+    }
+  } catch (err) {
+    const mapped = aiErrorResponse(err);
+    req.log.error({ err, jobId: opts.jobId, docId: opts.docId }, "Mock interview reply failed");
+    if (sse) {
+      sse.send("error", mapped);
+      sse.close();
+    } else {
+      res.status(mapped.status).json({ error: mapped.error });
+    }
+  }
+}
+
+// Start a session: pick `count` questions from the prep pack at random.
+router.post("/jobs/:id/mock-interviews", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+  const [job] = await db.select({ id: jobsTable.id }).from(jobsTable).where(eq(jobsTable.id, id));
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  const pack = await loadPrepPack(id);
+  if (!pack) {
+    res.status(400).json({ error: "Generate the interview prep pack first." });
+    return;
+  }
+  const requested = Number((req.body ?? {}).count);
+  const count = (MOCK_COUNTS as readonly number[]).includes(requested) ? requested : MOCK_COUNTS[1];
+  const session = newMockInterview(planFromPack(pack, count));
+  const [row] = await db
+    .insert(documentsTable)
+    .values({ jobId: id, type: MOCK_INTERVIEW_TYPE, contentJson: session })
+    .returning();
+  req.log.info({ jobId: id, docId: row.id, questions: session.plan.length }, "Mock interview started");
+  res.status(201).json(serializeDocument(row));
+});
+
+// The coach puts the next question. If it's already been put and not yet
+// answered, the saved question comes straight back (no model call).
+router.post("/jobs/:id/mock-interviews/:docId/next", async (req, res): Promise<void> => {
+  const loaded = await loadMockSession(req, res);
+  if (!loaded) return;
+  const { jobId, docId, session } = loaded;
+  if (session.status === "finished") {
+    res.status(409).json({ error: "This mock interview has finished." });
+    return;
+  }
+  const stage = mockStage(session);
+  if (stage.kind === "done") {
+    res.status(409).json({ error: "Every question has been asked." });
+    return;
+  }
+  if (stage.kind === "answer") {
+    const [row] = await db.select().from(documentsTable).where(eq(documentsTable.id, docId));
+    const body = { document: serializeDocument(row) };
+    if (wantsEventStream(req)) {
+      const sse = openSse(req, res);
+      sse.send("done", body);
+      sse.close();
+    } else {
+      res.json(body);
+    }
+    return;
+  }
+  await streamMockReply(req, res, {
+    jobId,
+    docId,
+    session,
+    next: stage,
+    maxTokens: 300,
+    apply: (s, reply) => ({
+      ...s,
+      turns: [
+        ...s.turns,
+        { asked: reply, answer: "", answer_seconds: null, answer_words: null, feedback: "" },
+      ],
+    }),
+  });
+});
+
+// Answer the current question and stream the coach's feedback. The answer is
+// saved before the AI call, so a failed call can be retried with it.
+router.post("/jobs/:id/mock-interviews/:docId/answer", async (req, res): Promise<void> => {
+  const loaded = await loadMockSession(req, res);
+  if (!loaded) return;
+  const { jobId, docId } = loaded;
+  let { session } = loaded;
+  const stage = mockStage(session);
+  if (session.status === "finished" || stage.kind !== "answer") {
+    res.status(409).json({ error: "There's no question waiting for an answer." });
+    return;
+  }
+  const answer = cleanAnswer((req.body ?? {}).answer);
+  if (!answer) {
+    res.status(400).json({ error: "The answer is empty." });
+    return;
+  }
+  const rawSeconds = Number((req.body ?? {}).seconds);
+  const seconds = Number.isFinite(rawSeconds) && rawSeconds > 0 ? Math.round(rawSeconds) : null;
+  const turns = [...session.turns];
+  turns[stage.index] = {
+    ...turns[stage.index],
+    answer,
+    answer_seconds: seconds,
+    answer_words: wordCount(answer),
+  };
+  session = { ...session, turns };
+  await saveMockSession(docId, session);
+
+  await streamMockReply(req, res, {
+    jobId,
+    docId,
+    session,
+    next: stage,
+    maxTokens: 1024,
+    apply: (s, reply) => {
+      const withFeedback = [...s.turns];
+      withFeedback[stage.index] = { ...withFeedback[stage.index], feedback: reply };
+      const last = withFeedback.length === s.plan.length;
+      return {
+        ...s,
+        turns: withFeedback,
+        ...(last ? { status: "finished" as const, finished_at: new Date().toISOString() } : {}),
+      };
+    },
+  });
+});
+
+// End a session early. A question that was asked but not answered is dropped.
+router.post("/jobs/:id/mock-interviews/:docId/finish", async (req, res): Promise<void> => {
+  const loaded = await loadMockSession(req, res);
+  if (!loaded) return;
+  const { docId, session } = loaded;
+  if (session.status === "finished") {
+    const [row] = await db.select().from(documentsTable).where(eq(documentsTable.id, docId));
+    res.json(serializeDocument(row));
+    return;
+  }
+  const row = await saveMockSession(docId, {
+    ...session,
+    status: "finished",
+    finished_at: new Date().toISOString(),
+    turns: session.turns.filter((t) => t.feedback),
+  });
+  res.json(serializeDocument(row));
+});
+
+router.delete("/jobs/:id/mock-interviews/:docId", async (req, res): Promise<void> => {
+  const loaded = await loadMockSession(req, res);
+  if (!loaded) return;
+  await db.delete(documentsTable).where(eq(documentsTable.id, loaded.docId));
+  res.sendStatus(204);
 });
 
 export default router;

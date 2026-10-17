@@ -7,6 +7,7 @@ import documentsRouter from "./documents";
 import generateRouter from "./generate";
 import discoverRouter from "./discover";
 import websiteRouter from "./website";
+import speechRouter from "./speech";
 import { requirePin } from "../middlewares/pinAuth";
 
 const router: IRouter = Router();
@@ -20,5 +21,6 @@ router.use(documentsRouter);
 router.use(generateRouter);
 router.use(discoverRouter);
 router.use(websiteRouter);
+router.use(speechRouter);
 
 export default router;
