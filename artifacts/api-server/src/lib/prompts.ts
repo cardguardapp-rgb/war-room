@@ -1,18 +1,6 @@
-// Central home for the AI models used and the system prompts. Keeping the
-// prompts here (rather than inline in routes) makes them easy to find and tune.
-
-// Job-posting extraction: the user explicitly chose Sonnet 4.6 for this.
-export const EXTRACT_MODEL = "claude-sonnet-4-6";
-// Resume tailoring: the most capable model, for the recruiter-review reasoning
-// and the anti-AI writing quality this demands.
-export const TAILOR_MODEL = "claude-opus-4-8";
-// Discover: classifying raw search hits against the user's parameters. A
-// filtering/judgement task — Sonnet 4.6 is fast and capable enough.
-export const DISCOVER_MODEL = "claude-sonnet-4-6";
-// Role-advice chat: same senior-recruiter persona, conversational. Opus 4.8.
-export const CHAT_MODEL = "claude-opus-4-8";
-// Personal-website copy drafting: headline/tagline/bio from the resume. Opus 4.8.
-export const WEBSITE_MODEL = "claude-opus-4-8";
+// Central home for the system prompts. Keeping the prompts here (rather than
+// inline in routes) makes them easy to find and tune. Model IDs live in
+// models.ts (one AI_MODEL_* variable per task).
 
 export const WEBSITE_DRAFT_SYSTEM = `You write the copy for a candidate's PERSONAL PROFESSIONAL WEBSITE, from their real resume (JSON) that you are given. Return a single JSON object and NOTHING else — no prose, no markdown fences.
 
@@ -249,10 +237,6 @@ You will receive:
 }
 - "answers": one entry per application question you can answer truthfully now, echoing the exact "question" text.
 - If you need more information for a question, add a "clarifying_questions" entry (with "affects" naming the application question) and omit that question from "answers" until you have the facts.`;
-
-// Skill grouping: a small, cheap classification task (not tailoring), so the
-// fast Sonnet model is plenty — no need for Opus reasoning here.
-export const SKILL_GROUPING_MODEL = "claude-sonnet-4-6";
 
 export const SKILL_GROUPING_SYSTEM = `You organise a flat list of resume skills into a small number of clearly labelled discipline groups, purely for layout — you are not tailoring or judging the skills.
 

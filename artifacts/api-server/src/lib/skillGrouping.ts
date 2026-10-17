@@ -1,5 +1,6 @@
 import { createJson } from "./anthropic";
-import { SKILL_GROUPING_MODEL, SKILL_GROUPING_SYSTEM } from "./prompts";
+import { SKILL_GROUPING_SYSTEM } from "./prompts";
+import { aiModel } from "./models";
 
 export interface SkillGroup {
   label: string;
@@ -21,7 +22,7 @@ export async function groupSkills(items: string[]): Promise<SkillGroup[] | null>
   if (items.length <= 3) return null; // Too few to bother grouping.
 
   const raw = await createJson<RawGroupingResult>({
-    model: SKILL_GROUPING_MODEL,
+    model: aiModel("skillGrouping"),
     system: SKILL_GROUPING_SYSTEM,
     user: JSON.stringify(items),
     maxTokens: 1024,

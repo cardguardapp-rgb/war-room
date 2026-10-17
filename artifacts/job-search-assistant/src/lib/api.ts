@@ -100,6 +100,78 @@ async function fetchMultipart<T>(path: string, formData: FormData): Promise<T> {
   return response.json();
 }
 
+/** One server-sent event: its name and JSON-decoded data. */
+export interface SseEvent {
+  event: string;
+  data: any;
+}
+
+/**
+ * POST and read a server-sent event stream, calling `onEvent` for each event
+ * as it arrives. Errors before the stream starts (validation, 401) throw an
+ * ApiError like fetchApi; an "error" event in the stream throws one too.
+ * Resolves when the stream ends.
+ */
+async function fetchEventStream(
+  path: string,
+  init: RequestInit,
+  onEvent: (e: SseEvent) => void,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_PATH}${path}`, {
+      ...init,
+      headers: { Accept: "text/event-stream", ...init.headers },
+      credentials: "include",
+    });
+  } catch {
+    throw networkError();
+  }
+
+  if (!response.ok || !response.body) {
+    let message = "An error occurred";
+    try {
+      message = (await response.json()).error || message;
+    } catch {
+      // Ignore
+    }
+    if (response.status === 401 && window.location.pathname !== "/") {
+      window.location.href = "/";
+    }
+    throw new ApiError(response.status, message);
+  }
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    let chunk: ReadableStreamReadResult<string>;
+    try {
+      chunk = await reader.read();
+    } catch {
+      throw networkError();
+    }
+    if (chunk.done) break;
+    buffer += chunk.value.replace(/\r\n/g, "\n");
+    let end: number;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const frame = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      let event = "message";
+      const data: string[] = [];
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+      }
+      if (data.length === 0) continue; // comment / keep-alive
+      const parsed = JSON.parse(data.join("\n"));
+      if (event === "error") {
+        throw new ApiError(parsed.status ?? 500, parsed.error ?? "An error occurred");
+      }
+      onEvent({ event, data: parsed });
+    }
+  }
+}
+
 export type JobStatus =
   | 'New'
   | 'Tailoring'
@@ -422,12 +494,31 @@ export const api = {
     assess: (id: number) => fetchApi<Document>(`/jobs/${id}/assess`, { method: "POST" }),
     // Multipart: the server owns the transcript, so we send only the new
     // question plus any attached files, and get the full transcript back.
-    chat: (id: number, message: string, files: File[] = []) => {
+    /** Stream a coach reply: onText gets each piece; resolves with the saved transcript. */
+    chatStream: async (
+      id: number,
+      message: string,
+      files: File[],
+      onText: (text: string) => void,
+    ): Promise<{ reply: string; messages: ChatMessage[] }> => {
       const fd = new FormData();
       fd.append("message", message);
       files.forEach((f) => fd.append("files", f));
-      return fetchMultipart<{ reply: string; messages: ChatMessage[] }>(`/jobs/${id}/chat`, fd);
+      let result: { reply: string; messages: ChatMessage[] } | null = null;
+      await fetchEventStream(`/jobs/${id}/chat`, { method: "POST", body: fd }, (e) => {
+        if (e.event === "text") onText(e.data.text);
+        else if (e.event === "done") result = e.data;
+      });
+      if (!result) throw new ApiError(0, "The reply was cut off. Check your connection and try again.");
+      return result;
     },
+    /** Dev only: the same question to the coach model and the compare model, side by side. */
+    chatCompare: (id: number, message: string, onEvent: (e: SseEvent) => void) =>
+      fetchEventStream(
+        `/jobs/${id}/chat/compare`,
+        { method: "POST", body: JSON.stringify({ message }), headers: { "Content-Type": "application/json" } },
+        onEvent,
+      ),
     getChat: (id: number) => fetchApi<{ messages: ChatMessage[] }>(`/jobs/${id}/chat`),
     clearChat: (id: number) => fetchApi<void>(`/jobs/${id}/chat`, { method: "DELETE" }),
     // Tailoring flow

@@ -1,7 +1,8 @@
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { createJson, createJsonFromImages, type ImageInput } from "./anthropic";
-import { EXTRACT_MODEL, JOB_EXTRACTION_SYSTEM, JOB_IMAGE_EXTRACTION_SYSTEM } from "./prompts";
+import { JOB_EXTRACTION_SYSTEM, JOB_IMAGE_EXTRACTION_SYSTEM } from "./prompts";
+import { aiModel } from "./models";
 import { renderPageDom } from "./pageRender";
 
 export type WorkArrangement = "office" | "hybrid" | "remote" | "unknown";
@@ -188,7 +189,7 @@ async function extractMeta(
   criteria?: JobCriteria,
 ): Promise<ExtractedMeta> {
   const p = await createJson<Partial<ExtractedJob>>({
-    model: EXTRACT_MODEL,
+    model: aiModel("extract"),
     maxTokens: 1500,
     system: JOB_EXTRACTION_SYSTEM,
     user: extractUserContent(rawText, criteria),
@@ -233,7 +234,7 @@ export async function extractFromImages(
   criteria?: JobCriteria,
 ): Promise<ExtractedJob> {
   const p = await createJsonFromImages<Partial<ExtractedJob>>({
-    model: EXTRACT_MODEL,
+    model: aiModel("extract"),
     maxTokens: 4096,
     system: JOB_IMAGE_EXTRACTION_SYSTEM,
     user: imageUserContent(criteria),

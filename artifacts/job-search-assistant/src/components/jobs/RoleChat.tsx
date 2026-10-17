@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import type { Job, ChatMessage, ChatAttachment } from "@/lib/api";
+import { ChatCompare } from "./ChatCompare";
 
 const STARTERS = [
   "Am I a strong fit for this role?",
@@ -65,6 +66,8 @@ export function RoleChat({ job }: { job: Job }) {
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // The coach's reply as it streams in; null when no reply is in progress.
+  const [streaming, setStreaming] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const seeded = useRef(false);
 
@@ -83,7 +86,7 @@ export function RoleChat({ job }: { job: Job }) {
   // Keep the latest message in view as the conversation grows.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, chat.isPending]);
+  }, [messages, chat.isPending, streaming]);
 
   const send = (text: string) => {
     const content = text.trim();
@@ -109,12 +112,23 @@ export function RoleChat({ job }: { job: Job }) {
     ]);
     setInput("");
     setFiles([]);
+    setStreaming("");
     chat.mutate(
-      { message: content, files: sending },
       {
-        onSuccess: (res) => setMessages(res.messages),
+        message: content,
+        files: sending,
+        onText: (piece) => setStreaming((s) => (s ?? "") + piece),
+      },
+      {
+        // Swap the streamed text for the saved transcript, so what stays on
+        // screen is exactly what was stored.
+        onSuccess: (res) => {
+          setMessages(res.messages);
+          setStreaming(null);
+        },
         onError: (err) => {
           // Drop the unanswered turn and hand the question + files back.
+          setStreaming(null);
           setMessages((m) => m.slice(0, -1));
           setInput(content);
           setFiles(sending);
@@ -200,7 +214,14 @@ export function RoleChat({ job }: { job: Job }) {
               </div>
             </div>
           ))}
-          {chat.isPending && (
+          {chat.isPending && streaming && (
+            <div className="flex justify-start">
+              <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-card border border-border px-3.5 py-2 text-sm whitespace-pre-wrap break-words">
+                {streaming}
+              </div>
+            </div>
+          )}
+          {chat.isPending && !streaming && (
             <div className="flex justify-start">
               <div className="rounded-2xl rounded-bl-md bg-card border border-border px-3.5 py-2 text-sm text-muted-foreground flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" /> Thinking…
@@ -303,6 +324,7 @@ export function RoleChat({ job }: { job: Job }) {
           {chat.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </Button>
       </div>
+      {import.meta.env.DEV && !disabled && <ChatCompare jobId={job.id} />}
       <p className="text-xs text-muted-foreground/70">
         This chat and its attachments are saved for this role — they stay here when you come back, remain
         in context for follow-up questions, and help tailor your future resumes, cover letters and

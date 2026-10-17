@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { getAnthropic, messageText, parseJsonFromText } from "./anthropic";
-import { TAILOR_MODEL, TAILOR_SYSTEM } from "./prompts";
+import { TAILOR_SYSTEM } from "./prompts";
+import { aiModel } from "./models";
 import type { ResumeJson } from "./resumeParser";
 
 export interface ClarifyingQuestion {
@@ -145,7 +146,7 @@ function normaliseResult(raw: unknown, input: TailorInput): TailorResult {
 export async function runTailor(input: TailorInput): Promise<TailorResult> {
   const client = getAnthropic();
   const params = {
-    model: TAILOR_MODEL,
+    model: aiModel("tailor"),
     max_tokens: 32000,
     thinking: { type: "adaptive" },
     output_config: { effort: "high" },

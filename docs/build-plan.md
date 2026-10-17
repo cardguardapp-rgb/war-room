@@ -266,8 +266,11 @@ isn't in the list. It needs either its own variable or to share
 
 ## Open questions
 
-- **Skill grouping model (M2):** does skill grouping get its own variable or
-  share `AI_MODEL_EXTRACT`?
+- ~~**Skill grouping model (M2):** does skill grouping get its own variable or
+  share `AI_MODEL_EXTRACT`?~~ **Decided:** its own, `AI_MODEL_SKILL_GROUPING`.
+  Cover letters and application answers also got their own,
+  `AI_MODEL_WRITING`, and the dev-only side by side uses
+  `AI_MODEL_CHAT_COMPARE` (default `claude-sonnet-5-5`).
 - **Dark mode:** `.dark` tokens exist in `index.css` but nothing applies them,
   so the app is light only. The light-and-dark rule for mobile screens needs a
   theme switch (probably following the system setting). When should that be

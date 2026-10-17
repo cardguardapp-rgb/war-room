@@ -1,4 +1,5 @@
 import { opusJson } from "./anthropic";
+import { aiModel } from "./models";
 import { APP_QUESTIONS_SYSTEM } from "./prompts";
 import type { ResumeJson } from "./resumeParser";
 import type { ClarifyingQuestion, QaPair } from "./tailor";
@@ -75,6 +76,6 @@ function normalise(raw: unknown): AppQuestionsResult {
 }
 
 export async function runAppQuestions(input: AppQuestionsInput): Promise<AppQuestionsResult> {
-  const raw = await opusJson(APP_QUESTIONS_SYSTEM, buildUserContent(input));
+  const raw = await opusJson(APP_QUESTIONS_SYSTEM, buildUserContent(input), aiModel("writing"));
   return normalise(raw);
 }

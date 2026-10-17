@@ -3,7 +3,8 @@ import JSZip from "jszip";
 import { db, eq, profileTable } from "../lib/db";
 import { uploadObject, downloadObject, objectExists } from "../lib/objectStore";
 import { aiErrorResponse, createJson, chatComplete } from "../lib/anthropic";
-import { WEBSITE_MODEL, WEBSITE_DRAFT_SYSTEM, WEBSITE_FIELD_SYSTEM } from "../lib/prompts";
+import { WEBSITE_DRAFT_SYSTEM, WEBSITE_FIELD_SYSTEM } from "../lib/prompts";
+import { aiModel } from "../lib/models";
 import {
   buildSite,
   buildPreviewPage,
@@ -76,7 +77,7 @@ router.post("/website/draft", async (req, res): Promise<void> => {
       bio?: string;
       about?: string;
     }>({
-      model: WEBSITE_MODEL,
+      model: aiModel("website"),
       maxTokens: 1500,
       system: WEBSITE_DRAFT_SYSTEM,
       user: `CANDIDATE RESUME (JSON):\n${JSON.stringify(resume)}`,
@@ -146,7 +147,7 @@ router.post("/website/write", async (req, res): Promise<void> => {
       .filter(Boolean)
       .join("\n\n");
     const text = await chatComplete({
-      model: WEBSITE_MODEL,
+      model: aiModel("website"),
       system,
       messages: [{ role: "user", content: user }],
       maxTokens: 1200,

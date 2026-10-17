@@ -2,7 +2,8 @@
 // then classify the raw hits against those parameters with the AI.
 
 import { createJson } from "./anthropic";
-import { DISCOVER_CLASSIFY_SYSTEM, DISCOVER_MODEL } from "./prompts";
+import { DISCOVER_CLASSIFY_SYSTEM } from "./prompts";
+import { aiModel } from "./models";
 import { tavilySearchSpecs, type TavilyQuerySpec, type TavilyResult } from "./tavily";
 import { harvestPostings } from "./pageScan";
 
@@ -371,7 +372,7 @@ async function classifyBatch(
   ].join("\n");
 
   const parsed = await createJson<{ results?: unknown[] }>({
-    model: DISCOVER_MODEL,
+    model: aiModel("discover"),
     maxTokens: 4096,
     system: DISCOVER_CLASSIFY_SYSTEM,
     user: userContent,

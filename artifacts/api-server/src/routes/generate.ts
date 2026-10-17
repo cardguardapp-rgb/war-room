@@ -4,8 +4,10 @@ import { inArray } from "drizzle-orm";
 import { db, eq, and, desc, jobsTable, profileTable, documentsTable, qaLogTable, type Job } from "../lib/db";
 import { serializeDocument } from "../lib/serialize";
 import { deleteObject } from "../lib/objectStore";
-import { aiErrorResponse, chatComplete, type ChatMessage } from "../lib/anthropic";
-import { CHAT_MODEL, CHAT_SYSTEM } from "../lib/prompts";
+import { aiErrorResponse, streamChat, type ChatMessage } from "../lib/anthropic";
+import { aiModel, chatModelParams } from "../lib/models";
+import { openSse, wantsEventStream } from "../lib/sse";
+import { CHAT_SYSTEM } from "../lib/prompts";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
 import {
@@ -198,22 +200,36 @@ router.post("/jobs/:id/chat", uploadChatFiles, async (req, res): Promise<void> =
   // Bound what we send to the model (last 20 turns) to control token cost.
   const turns = [...history, userTurn].slice(-20);
 
+  // With Accept: text/event-stream the reply is streamed as "text" events and
+  // ends with "done" (the saved transcript) or "error"; otherwise plain JSON.
+  // Even if the client drops mid-reply, the reply is finished and saved.
+  const sse = wantsEventStream(req) ? openSse(req, res) : null;
   try {
     const messages: ChatMessage[] = await Promise.all(
       turns.map(async (t) => ({ role: t.role, content: await buildTurnContent(t) })),
     );
-    const reply = (
-      await chatComplete({
-        model: CHAT_MODEL,
-        system: buildChatSystem(ctx.job, ctx.resumeJson, ctx.extraAnswers),
-        messages,
-        maxTokens: 2048,
-      })
-    ).trim();
+    const model = aiModel("chat");
+    const result = await streamChat({
+      model,
+      extraParams: chatModelParams(model),
+      system: buildChatSystem(ctx.job, ctx.resumeJson, ctx.extraAnswers),
+      messages,
+      maxTokens: 2048,
+      onText: (text) => sse?.send("text", { text }),
+    });
+    const { text: _text, ...timing } = result;
+    req.log.info({ jobId: id, streamed: !!sse, ...timing }, "Role chat reply");
+    const reply = result.text.trim();
 
     const saved: ChatTurn[] = [...history, userTurn, { role: "assistant", content: reply }];
     await saveChat(id, saved);
-    res.json({ reply, messages: saved.map(publicTurn) });
+    const body = { reply, messages: saved.map(publicTurn) };
+    if (sse) {
+      sse.send("done", body);
+      sse.close();
+    } else {
+      res.json(body);
+    }
   } catch (err) {
     // Don't strand the just-uploaded objects — nothing was saved.
     await Promise.all(
@@ -221,9 +237,75 @@ router.post("/jobs/:id/chat", uploadChatFiles, async (req, res): Promise<void> =
     );
     const mapped = aiErrorResponse(err);
     req.log.error({ err, jobId: id }, "Role chat failed");
-    res.status(mapped.status).json({ error: mapped.error });
+    if (sse) {
+      sse.send("error", mapped);
+      sse.close();
+    } else {
+      res.status(mapped.status).json({ error: mapped.error });
+    }
   }
 });
+
+// Dev only (the route doesn't exist in production): send one question to the
+// current coach model and to AI_MODEL_CHAT_COMPARE side by side, with the same
+// system prompt and history, so Amy can judge whether the faster model still
+// sounds like the coach. Nothing is saved. Streams "text" { lane, text },
+// "lane_done" { lane, ...timing } / "lane_error" { lane, error }, then "done".
+if (process.env.NODE_ENV !== "production") {
+  router.post("/jobs/:id/chat/compare", async (req, res): Promise<void> => {
+    const id = parseId(req.params.id);
+    if (id === null) {
+      res.status(400).json({ error: "Invalid job id" });
+      return;
+    }
+    const message = String((req.body ?? {}).message ?? "").trim().slice(0, 8000);
+    if (!message) {
+      res.status(400).json({ error: "Type a question." });
+      return;
+    }
+    const ctx = await loadGenContext(id, res);
+    if (!ctx) return;
+
+    const history = await loadChat(id);
+    const turns: ChatTurn[] = [...history, { role: "user" as const, content: message }].slice(-20);
+    const system = buildChatSystem(ctx.job, ctx.resumeJson, ctx.extraAnswers);
+    const sse = openSse(req, res);
+    try {
+      const messages: ChatMessage[] = await Promise.all(
+        turns.map(async (t) => ({ role: t.role, content: await buildTurnContent(t) })),
+      );
+      const lanes = [
+        { lane: "current", model: aiModel("chat") },
+        { lane: "compare", model: aiModel("chatCompare") },
+      ];
+      await Promise.all(
+        lanes.map(async ({ lane, model }) => {
+          try {
+            const result = await streamChat({
+              model,
+              extraParams: chatModelParams(model),
+              system,
+              messages,
+              maxTokens: 2048,
+              onText: (text) => sse.send("text", { lane, text }),
+            });
+            const { text: _text, ...timing } = result;
+            req.log.info({ jobId: id, lane, ...timing }, "Chat compare reply");
+            sse.send("lane_done", { lane, ...timing });
+          } catch (err) {
+            const mapped = aiErrorResponse(err);
+            req.log.error({ err, jobId: id, lane, model }, "Chat compare lane failed");
+            sse.send("lane_error", { lane, model, error: mapped.error });
+          }
+        }),
+      );
+      sse.send("done", {});
+    } catch (err) {
+      sse.send("error", aiErrorResponse(err));
+    }
+    sse.close();
+  });
+}
 
 // Load the saved advice-chat transcript for a job (empty array if none).
 router.get("/jobs/:id/chat", async (req, res): Promise<void> => {

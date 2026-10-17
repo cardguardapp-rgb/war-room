@@ -221,10 +221,15 @@ export function useAssessJob(jobId: number) {
 }
 
 /** Ask the recruiter persona a question about this role, with optional attachments. */
+/** The reply streams in through `onText`; success carries the saved transcript. */
 export function useJobChat(jobId: number) {
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (v: { message: string; files?: File[] }) =>
-      api.jobs.chat(jobId, v.message, v.files ?? []),
+    mutationFn: (v: { message: string; files?: File[]; onText: (text: string) => void }) =>
+      api.jobs.chatStream(jobId, v.message, v.files ?? [], v.onText),
+    onSuccess: (res) => {
+      queryClient.setQueryData(queryKeys.chat(jobId), { messages: res.messages });
+    },
   });
 }
 

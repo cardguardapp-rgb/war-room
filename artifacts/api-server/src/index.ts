@@ -3,6 +3,7 @@ import "@workspace/db/env";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { authConfigProblems } from "./middlewares/pinAuth";
+import { logModelSettings } from "./lib/models";
 
 const rawPort = process.env["PORT"];
 
@@ -21,6 +22,7 @@ if (Number.isNaN(port) || port <= 0) {
 for (const problem of authConfigProblems()) {
   logger.error(problem);
 }
+logModelSettings();
 
 app.listen(port, (err) => {
   if (err) {

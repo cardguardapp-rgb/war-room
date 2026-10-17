@@ -84,15 +84,14 @@ export async function parseJsonWithRetry<T>(
 }
 
 /**
- * Run a single Opus 4.8 request (adaptive thinking, streaming, effort high)
- * whose response should be a JSON object, and return the parsed value. Retries
- * once on malformed JSON. Used by the tailoring, cover-letter, and
- * application-question flows.
+ * Run a single request (adaptive thinking, streaming, effort high) whose
+ * response should be a JSON object, and return the parsed value. Retries once
+ * on malformed JSON. Used by the cover-letter and application-question flows.
  */
 export async function opusJson(
   system: string,
   userContent: string,
-  model = "claude-opus-4-8",
+  model: string,
 ): Promise<unknown> {
   const client = getAnthropic();
   const params = {
@@ -191,12 +190,12 @@ export interface ChatMessage {
 export async function chatComplete(opts: {
   system: string;
   messages: ChatMessage[];
-  model?: string;
+  model: string;
   maxTokens?: number;
 }): Promise<string> {
   const client = getAnthropic();
   const message = await client.messages.create({
-    model: opts.model ?? "claude-opus-4-8",
+    model: opts.model,
     max_tokens: opts.maxTokens ?? 2048,
     system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
     // Cast: `content` may be a mixed image/document/text block array, which is
@@ -207,6 +206,72 @@ export async function chatComplete(opts: {
     })),
   });
   return messageText(message);
+}
+
+/** Thrown when the model declines to answer (stop_reason "refusal"). */
+export class AiRefusalError extends Error {
+  constructor() {
+    super("The AI declined to answer that. Try rephrasing the question.");
+    this.name = "AiRefusalError";
+  }
+}
+
+export interface ChatStreamResult {
+  text: string;
+  model: string;
+  /** Milliseconds from sending the request to the first word of the reply. */
+  firstWordMs: number | null;
+  totalMs: number;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * Stream a plain-text multi-turn chat reply, calling `onText` with each piece
+ * as it's written. Caching: the system prompt (persona + grounding context)
+ * has its own breakpoint, and top-level automatic caching covers the growing
+ * conversation, so from the second message on both are read from the cache.
+ * `extraParams` carries model-specific fields (see chatModelParams).
+ */
+export async function streamChat(opts: {
+  system: string;
+  messages: ChatMessage[];
+  model: string;
+  maxTokens?: number;
+  extraParams?: Record<string, unknown>;
+  onText: (text: string) => void;
+}): Promise<ChatStreamResult> {
+  const client = getAnthropic();
+  const started = Date.now();
+  let firstWordMs: number | null = null;
+  const params = {
+    model: opts.model,
+    max_tokens: opts.maxTokens ?? 2048,
+    cache_control: { type: "ephemeral" },
+    system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
+    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+    ...opts.extraParams,
+  } as unknown as Anthropic.MessageStreamParams;
+  const stream = client.messages.stream(params);
+  stream.on("text", (delta) => {
+    if (firstWordMs === null && delta.trim() !== "") firstWordMs = Date.now() - started;
+    opts.onText(delta);
+  });
+  const message = await stream.finalMessage();
+  if (message.stop_reason === "refusal") throw new AiRefusalError();
+  const usage = message.usage as Anthropic.Usage;
+  return {
+    text: messageText(message),
+    model: message.model,
+    firstWordMs,
+    totalMs: Date.now() - started,
+    inputTokens: usage.input_tokens,
+    cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
+    outputTokens: usage.output_tokens,
+  };
 }
 
 /**
@@ -227,7 +292,7 @@ export function aiErrorResponse(err: unknown): { status: number; error: string }
   if (err instanceof AiConfigError) {
     return { status: 503, error: err.message };
   }
-  if (err instanceof AiJsonError) {
+  if (err instanceof AiJsonError || err instanceof AiRefusalError) {
     return { status: 502, error: err.message };
   }
   if (err instanceof Anthropic.APIError) {

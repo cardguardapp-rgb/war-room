@@ -171,7 +171,8 @@ Names only — values live in `.env` (local) and Replit Secrets (production).
 | `CHROMIUM_PATH` | `pageRender.ts` | Optional Chromium path |
 | `LOG_LEVEL`, `NODE_ENV` | logger, cookies | |
 
-Later milestones add `AI_MODEL_*` (M2–M6) and the AssemblyAI key (M4).
+The optional `AI_MODEL_*` variables (M2) are listed under "Models and prompts";
+unset means the default. Later milestones add the AssemblyAI key (M4).
 
 ## Folder structure
 
@@ -189,9 +190,11 @@ artifacts/api-server/
       logger.ts             # pino (use req.log / logger, never console.log)
       serialize.ts          # camelCase row → snake_case API shape
       resumeParser.ts       # pure .docx → { resumeJson, styleMap, warnings } (JSZip + fast-xml-parser)
-      anthropic.ts          # client; opusJson / createJson / createJsonFromImages / chatComplete;
-                            #   parseJsonWithRetry; AiConfigError / AiJsonError; aiErrorResponse
-      prompts.ts            # model IDs + every system prompt (CHAT_SYSTEM, TAILOR_SYSTEM, …)
+      anthropic.ts          # client; opusJson / createJson / createJsonFromImages / chatComplete / streamChat;
+                            #   parseJsonWithRetry; AiConfigError / AiJsonError / AiRefusalError; aiErrorResponse
+      prompts.ts            # every system prompt (CHAT_SYSTEM, TAILOR_SYSTEM, …)
+      models.ts             # AI_MODEL_* per task (aiModel), defaults, chatModelParams
+      sse.ts                # server-sent events helper (openSse, wantsEventStream)
       jobExtract.ts         # URL fetch + Readability (+ headless render fallback), image extraction
       tailor.ts             # resume tailoring (streamed Opus call, initial/finalize/revise)
       coverLetters.ts       # cover letters (full + short; plain = full.body)
@@ -214,7 +217,7 @@ artifacts/api-server/
       profile.ts            # profile GET/PATCH; resume parse/confirm/download; GET /profile/export
       jobs.ts               # job CRUD; extract / extract-image; assess; tailor/qa/finalize/revise/approve
       documents.ts          # list; regenerate; download docx|pdf (lazy build + cache)
-      generate.ts           # role chat; cover letters; application questions
+      generate.ts           # role chat (streamed) + dev-only compare; cover letters; application questions
       discover.ts           # settings, search, dismiss
       website.ts            # personal website config, AI draft/write, preview, export zip
   test/                     # tsx smoke scripts (see "Smoke tests")
@@ -223,7 +226,7 @@ artifacts/job-search-assistant/src/
   AppRouter.tsx             # wouter <Switch>: / and /jobs, /jobs/:id, /profile, /discover, /website
   lib/api.ts                # every API call + shared types (mirror of server shapes)
   pages/                    # jobs, job-detail, profile, discover, website, login, not-found
-  components/jobs/          # AddJobDialog, TailorFlow, ResumeDiff, CoverLetterFlow, AppQuestions, RoleChat, CopyButton
+  components/jobs/          # AddJobDialog, TailorFlow, ResumeDiff, CoverLetterFlow, AppQuestions, RoleChat, ChatCompare (dev only), CopyButton
   components/profile/       # ResumeReview, ExtraAnswers, AdditionalContext, resumeDraft
   components/discover/      # SettingsEditor, ResultCard
   components/layout/        # AppLayout (bottom tab bar mobile / sidebar desktop)
@@ -369,22 +372,28 @@ interview, cue cards, debrief).
 
 ## Models and prompts
 
-All model IDs and system prompts are in `artifacts/api-server/src/lib/prompts.ts`
-(today as hard-coded constants; M2 moves each to an `AI_MODEL_*` env var with
-these values as defaults):
+System prompts are in `artifacts/api-server/src/lib/prompts.ts`. Model IDs are
+in `lib/models.ts` (M2): each task reads its own **optional** env var at call
+time and falls back to the default (`aiModel(task)`). Every resolution is logged
+(`"AI model"` with `task`, `model`, `source: env|default`), and the startup log
+lists all of them. **Ask Amy before changing a default.**
 
-| Constant | Model | Used for |
-|---|---|---|
-| `EXTRACT_MODEL` | `claude-sonnet-4-6` | Job extraction (URL/text/screenshots) + fit assessment (Amy chose this) |
-| `TAILOR_MODEL` | `claude-opus-4-8` | Resume tailoring (adaptive thinking, effort high, streamed) |
-| `DISCOVER_MODEL` | `claude-sonnet-4-6` | Discover result classification |
-| `CHAT_MODEL` | `claude-opus-4-8` | Role-advice chat |
-| `WEBSITE_MODEL` | `claude-opus-4-8` | Personal-website copy |
-| `SKILL_GROUPING_MODEL` | `claude-sonnet-4-6` | Grouping skills for the .docx layout |
+| Task (`aiModel`) | Env var | Default | Used for |
+|---|---|---|---|
+| `extract` | `AI_MODEL_EXTRACT` | `claude-sonnet-4-6` | Job extraction (URL/text/screenshots) + fit assessment (Amy chose this) |
+| `tailor` | `AI_MODEL_TAILOR` | `claude-opus-4-8` | Resume tailoring (adaptive thinking, effort high, streamed) |
+| `writing` | `AI_MODEL_WRITING` | `claude-opus-4-8` | Cover letters + application answers (`opusJson`) |
+| `chat` | `AI_MODEL_CHAT` | `claude-opus-4-8` | Role-advice chat (the coach) |
+| `discover` | `AI_MODEL_DISCOVER` | `claude-sonnet-4-6` | Discover result classification |
+| `website` | `AI_MODEL_WEBSITE` | `claude-opus-4-8` | Personal-website copy |
+| `skillGrouping` | `AI_MODEL_SKILL_GROUPING` | `claude-sonnet-4-6` | Grouping skills for the .docx layout |
+| `chatCompare` | `AI_MODEL_CHAT_COMPARE` | `claude-sonnet-5-5` | **Dev only:** the side-by-side model (see the chat flow) |
 
-`opusJson` and `chatComplete` in `anthropic.ts` also default to
-`claude-opus-4-8` when no model is passed. System prompts are sent with
-`cache_control: ephemeral`. **All model JSON parsing retries once** on malformed
+`opusJson` and `chatComplete` take the model as a required argument (no
+built-in default). `chatModelParams(model)` adds model-specific chat fields:
+`claude-sonnet-5-5*` gets `thinking: { type: "between_tools" }` (it thinks by
+default and rejects `disabled`); Opus 4.8 / Sonnet 4.6 get nothing (they don't
+think unless asked). System prompts are sent with `cache_control: ephemeral`. **All model JSON parsing retries once** on malformed
 output (`parseJsonWithRetry`) before a clean 502 (`AiJsonError`).
 `aiErrorResponse` maps errors: missing key / invalid key / billing → 503, rate
 limit → 429, others → 502.
@@ -517,9 +526,33 @@ product requirement; don't replace it with a hamburger menu.
 - **The server owns the transcript.** The client posts only the new message +
   files as **multipart** (`message`, `files`) to `POST /jobs/:id/chat` and gets
   `{ reply, messages }` back. The last 20 turns are sent to the model.
-  `chatComplete` today is a **non-streaming** `messages.create`, `max_tokens`
-  2048, system prompt cached. `GET /jobs/:id/chat` loads the transcript;
-  `DELETE /jobs/:id/chat` clears it ("New chat").
+- **Streaming (M2):** with `Accept: text/event-stream` the same endpoint streams
+  SSE (`lib/sse.ts` `openSse`): `text` `{ text }` events as the reply is
+  written, then `done` `{ reply, messages }` (the saved transcript, which the
+  client swaps in so the screen matches what's stored) or `error`
+  `{ status, error }`. Without that header it returns JSON as before. Errors
+  before the stream opens (validation, 401, ingest) are normal JSON responses.
+  If the client drops mid-reply, the reply still finishes and is saved. The
+  client reads it with `fetchEventStream` in `api.ts` (fetch + stream reader;
+  EventSource can't POST files). `openSse` defeats proxy buffering with
+  `no-transform`, `X-Accel-Buffering: no`, a 2KB padding comment and a 15s
+  heartbeat.
+- **Speed + caching:** `streamChat` (`anthropic.ts`) puts a cache breakpoint on
+  the system prompt (persona + grounding) and uses top-level automatic caching
+  for the conversation, so from the second message on both are cache reads.
+  Each reply logs `"Role chat reply"` with `model`, `firstWordMs`, `totalMs`,
+  `inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`. Once a
+  chat passes 20 turns the window slides, so history caching stops matching
+  (the system prompt still caches). `max_tokens` 2048.
+- **Dev-only side by side:** `POST /jobs/:id/chat/compare` `{ message }` is
+  registered only when `NODE_ENV !== "production"`, and `ChatCompare.tsx` renders
+  only under `import.meta.env.DEV` ("Compare models (dev)" switch under the
+  chat). It sends the question, with the saved history, to `aiModel("chat")` and
+  `aiModel("chatCompare")` in parallel and streams `text` `{ lane, text }`,
+  `lane_done` `{ lane, ...timing }` / `lane_error`, then `done`. Nothing is
+  saved. No attachments.
+- `GET /jobs/:id/chat` loads the transcript; `DELETE /jobs/:id/chat` clears it
+  ("New chat").
 - Saved as one `chat` document per job (`chatStore.ts`
   `loadChat`/`saveChat`/`clearChat`).
 - **Attachments** (`chatAttachments.ts`): images, PDF, `.docx`, `.txt`, `.md`,

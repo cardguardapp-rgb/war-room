@@ -1,4 +1,5 @@
 import { opusJson } from "./anthropic";
+import { aiModel } from "./models";
 import { COVER_LETTER_SYSTEM } from "./prompts";
 import type { ResumeJson } from "./resumeParser";
 import type { ClarifyingQuestion, QaPair } from "./tailor";
@@ -92,6 +93,6 @@ function normalise(raw: unknown, input: CoverLetterInput): CoverLetterResult {
 }
 
 export async function runCoverLetters(input: CoverLetterInput): Promise<CoverLetterResult> {
-  const raw = await opusJson(COVER_LETTER_SYSTEM, buildUserContent(input));
+  const raw = await opusJson(COVER_LETTER_SYSTEM, buildUserContent(input), aiModel("writing"));
   return normalise(raw, input);
 }
