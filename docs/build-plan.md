@@ -119,7 +119,7 @@ isn't in the list. It needs either its own variable or to share
 
 ---
 
-## [ ] M3: Interview prep pack
+## [x] M3: Interview prep pack
 
 **Scope**
 - An Interview prep section on Job Detail that generates and saves a
