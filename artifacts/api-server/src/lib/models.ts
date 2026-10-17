@@ -15,6 +15,7 @@ export type AiTask =
   | "discover"
   | "website"
   | "skillGrouping"
+  | "interviewPrep"
   | "chatCompare";
 
 interface ModelSetting {
@@ -39,6 +40,8 @@ export const MODEL_SETTINGS: Record<AiTask, ModelSetting> = {
   website: { env: "AI_MODEL_WEBSITE", fallback: "claude-opus-4-8", label: "website copy" },
   // Grouping skills for the .docx layout.
   skillGrouping: { env: "AI_MODEL_SKILL_GROUPING", fallback: "claude-sonnet-4-6", label: "skill grouping" },
+  // Interview prep pack: stories, likely questions, gaps, questions to ask.
+  interviewPrep: { env: "AI_MODEL_INTERVIEW_PREP", fallback: "claude-opus-4-8", label: "interview prep pack" },
   // Dev only: the faster model the side-by-side compares the coach against.
   chatCompare: { env: "AI_MODEL_CHAT_COMPARE", fallback: "claude-sonnet-5-5", label: "chat compare (dev only)" },
 };

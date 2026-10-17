@@ -199,6 +199,7 @@ artifacts/api-server/
       tailor.ts             # resume tailoring (streamed Opus call, initial/finalize/revise)
       coverLetters.ts       # cover letters (full + short; plain = full.body)
       appQuestions.ts       # application-question answers (resume-grounded only)
+      interviewPrep.ts      # interview prep pack (M3): runInterviewPrep, normaliseInterviewPrep
       chatStore.ts          # role chat persistence; formatCoachingNotes()
       chatAttachments.ts    # chat upload ingest (images/PDF → object storage; docx/txt/md/csv → text)
       docBuild.ts           # resume + cover-letter .docx builders (docx package)
@@ -217,7 +218,7 @@ artifacts/api-server/
       profile.ts            # profile GET/PATCH; resume parse/confirm/download; GET /profile/export
       jobs.ts               # job CRUD; extract / extract-image; assess; tailor/qa/finalize/revise/approve
       documents.ts          # list; regenerate; download docx|pdf (lazy build + cache)
-      generate.ts           # role chat (streamed) + dev-only compare; cover letters; application questions
+      generate.ts           # role chat (streamed) + dev-only compare; cover letters; application questions; interview prep
       discover.ts           # settings, search, dismiss
       website.ts            # personal website config, AI draft/write, preview, export zip
   test/                     # tsx smoke scripts (see "Smoke tests")
@@ -226,7 +227,8 @@ artifacts/job-search-assistant/src/
   AppRouter.tsx             # wouter <Switch>: / and /jobs, /jobs/:id, /profile, /discover, /website
   lib/api.ts                # every API call + shared types (mirror of server shapes)
   pages/                    # jobs, job-detail, profile, discover, website, login, not-found
-  components/jobs/          # AddJobDialog, TailorFlow, ResumeDiff, CoverLetterFlow, AppQuestions, RoleChat, ChatCompare (dev only), CopyButton
+  components/jobs/          # AddJobDialog, TailorFlow, ResumeDiff, CoverLetterFlow, AppQuestions, RoleChat, ChatCompare (dev only), CopyButton, InterviewPrep
+  components/InfoTip.tsx    # the (i) tooltip (a popover, so it opens on tap) — the only place help text goes
   components/profile/       # ResumeReview, ExtraAnswers, AdditionalContext, resumeDraft
   components/discover/      # SettingsEditor, ResultCard
   components/layout/        # AppLayout (bottom tab bar mobile / sidebar desktop)
@@ -261,8 +263,10 @@ returns **snake_case** (see `serialize.ts` and the per-route serialisers).
     `cover_note` — `{ text }`
   - `assessment` — fit score/summary/flags, one per job
   - `chat` — role-chat transcript `{ messages }`, one per job
+  - `interview_prep` — interview prep pack `{ stories, questions, gaps,
+    questions_to_ask }`, one per job (see "Interview prep pack")
   **New kinds of data go here** (new `type` + `content_json`). Planned:
-  `interview_prep` (M3), `mock_interview` (M4), `interview` (M7).
+  `mock_interview` (M4), `interview` (M7).
 - **`qa_log`** — question/answer pairs per job (FK cascade).
 - **`discover_settings`** — single row `id = 1`, `settings_json`. Absent → defaults.
 - **`discover_dismissed`** — one row per dismissed URL (`url` primary key).
@@ -387,6 +391,7 @@ lists all of them. **Ask Amy before changing a default.**
 | `discover` | `AI_MODEL_DISCOVER` | `claude-sonnet-4-6` | Discover result classification |
 | `website` | `AI_MODEL_WEBSITE` | `claude-opus-4-8` | Personal-website copy |
 | `skillGrouping` | `AI_MODEL_SKILL_GROUPING` | `claude-sonnet-4-6` | Grouping skills for the .docx layout |
+| `interviewPrep` | `AI_MODEL_INTERVIEW_PREP` | `claude-opus-4-8` | Interview prep pack (`opusJson`) |
 | `chatCompare` | `AI_MODEL_CHAT_COMPARE` | `claude-sonnet-5-5` | **Dev only:** the side-by-side model (see the chat flow) |
 
 `opusJson` and `chatComplete` take the model as a required argument (no
@@ -402,7 +407,9 @@ Prompts: `JOB_EXTRACTION_SYSTEM`, `JOB_IMAGE_EXTRACTION_SYSTEM`, `TAILOR_SYSTEM`
 (senior-recruiter tailoring with anti-AI-writing rules, ATS/rejection-risk/bullet
 checks and the JSON contract), `COVER_LETTER_SYSTEM`, `APP_QUESTIONS_SYSTEM`,
 `CHAT_SYSTEM` (**do not change without asking**), `WEBSITE_DRAFT_SYSTEM`,
-`WEBSITE_FIELD_SYSTEM`, `SKILL_GROUPING_SYSTEM`, `DISCOVER_CLASSIFY_SYSTEM`.
+`WEBSITE_FIELD_SYSTEM`, `SKILL_GROUPING_SYSTEM`, `DISCOVER_CLASSIFY_SYSTEM`,
+`INTERVIEW_PREP_SYSTEM` (a standalone generation prompt, not built on
+`CHAT_SYSTEM`).
 
 ## Pages (frontend)
 
@@ -566,6 +573,31 @@ product requirement; don't replace it with a hamburger menu.
   not fact; never invent), threaded as `coachingNotes` into
   `runTailor`/`runCoverLetters`/`runAppQuestions`.
 
+### Interview prep pack (M3)
+- **Interview prep** section on Job Detail (`InterviewPrep.tsx`). It sits at the
+  top of the AI flows when the status is `Interview` or `Offer`, otherwise after
+  application questions. It isn't listed under Documents.
+- `POST /jobs/:id/interview-prep` generates the pack with
+  `INTERVIEW_PREP_SYSTEM` (`lib/interviewPrep.ts`) and saves it, replacing any
+  previous one (the row is updated in place). Grounding: the posting, the
+  **base** resume, the approved tailored resume if any (labelled as what the
+  interviewers have read), extra answers and the role chat
+  (`formatCoachingNotes`). `loadGenContext` returns `baseResume` and
+  `tailoredResume` separately for this. Logs `"Interview prep generated"` with
+  timing and counts (incl. `noMetric`). No stories → 502.
+- `PUT /jobs/:id/interview-prep` `{ pack }` saves an edited pack. Both routes
+  return the serialised document, and both run `normaliseInterviewPrep`
+  (trims text, drops empty items, makes ids unique, blank metric → `null`,
+  points each question at a real story by id or title, else `""`).
+- Shape: `stories[]` `{ id, title, requirement, situation, action, result,
+  metric: string | null, source }` (8–12; `metric: null` shows as "No real
+  metric on record"; `source` makes each story traceable); `questions[]` `{ id,
+  question, story_id, angle }` (12–15); `gaps[]` `{ id, requirement, gap,
+  how_to_handle }`; `questions_to_ask[]` `{ id, question, why }`.
+- UI: four tabs (2×2 below `sm`); stories in an accordion; a question's story
+  link jumps to that story. Every item has edit/delete, each list has "Add".
+  Regenerate asks first because it replaces edits.
+
 ### Discover (web job search)
 - **Parameters** (`discover_settings`, defaults `DEFAULT_DISCOVER_SETTINGS` in
   `discover.ts`): `roleTitles[]`, `officeRegion` (Gold Coast↔Brisbane),
@@ -676,6 +708,7 @@ Run from the repo root with `pnpm --filter @workspace/api-server exec tsx test/<
 - `authTest.ts` — session expiry/tampering/rotation, lockout schedule, CORS
   origin rules (no keys, no DB; sets its own throwaway PIN and secret).
 - `parseFixture.ts` — resume parser (no keys, no DB).
+- `interviewPrepTest.ts` — interview prep pack normaliser (no keys, no DB).
 - `docTest.ts` — docx/pdf generation.
 - `fetchTest.ts` — job page fetch + clean (network).
 - `polishTest.ts` — JSON retry + export; **uses the DB**.

@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, Job, Profile, type WebsiteConfig } from "@/lib/api";
+import { api, Job, Profile, type Document, type InterviewPrep, type WebsiteConfig } from "@/lib/api";
 
 // Keys
 export const queryKeys = {
@@ -319,6 +319,34 @@ export function useQuestionsSave() {
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: Parameters<typeof api.jobs.questionsSave>[1] }) =>
       api.jobs.questionsSave(id, data),
+  });
+}
+
+// Interview prep pack. Both calls return the saved document, which replaces
+// the old one in the cached documents list so the screen doesn't flash back.
+function usePutPrepDoc(jobId: number) {
+  const queryClient = useQueryClient();
+  return (doc: Document) => {
+    queryClient.setQueryData<Document[]>(queryKeys.documents(jobId), (docs) =>
+      docs ? [doc, ...docs.filter((d) => d.type !== "interview_prep")] : [doc],
+    );
+    queryClient.invalidateQueries({ queryKey: queryKeys.documents(jobId) });
+  };
+}
+
+export function useGenerateInterviewPrep(jobId: number) {
+  const putDoc = usePutPrepDoc(jobId);
+  return useMutation({
+    mutationFn: () => api.jobs.interviewPrepGenerate(jobId),
+    onSuccess: putDoc,
+  });
+}
+
+export function useSaveInterviewPrep(jobId: number) {
+  const putDoc = usePutPrepDoc(jobId);
+  return useMutation({
+    mutationFn: (pack: InterviewPrep) => api.jobs.interviewPrepSave(jobId, pack),
+    onSuccess: putDoc,
   });
 }
 

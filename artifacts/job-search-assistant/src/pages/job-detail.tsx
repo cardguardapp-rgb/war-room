@@ -33,6 +33,7 @@ import { api, type Document, type JobStatus } from "@/lib/api";
 import { TailorFlow } from "@/components/jobs/TailorFlow";
 import { CoverLetterFlow } from "@/components/jobs/CoverLetterFlow";
 import { AppQuestions } from "@/components/jobs/AppQuestions";
+import { InterviewPrep } from "@/components/jobs/InterviewPrep";
 import { RoleChat } from "@/components/jobs/RoleChat";
 import { CopyButton } from "@/components/jobs/CopyButton";
 
@@ -68,6 +69,7 @@ const docTypeLabels: Record<Document["type"], string> = {
   cover_note: "Cover note",
   assessment: "Fit assessment",
   chat: "Advice chat",
+  interview_prep: "Interview prep",
 };
 
 function contentText(doc: Document): string {
@@ -108,6 +110,7 @@ export default function JobDetail() {
   const coverDoc = documents?.find((d) => d.type === "cover_letter");
   const noteDoc = documents?.find((d) => d.type === "cover_note");
   const assessmentDoc = documents?.find((d) => d.type === "assessment");
+  const prepDoc = documents?.find((d) => d.type === "interview_prep");
   const hasQuickActions = !!(resumeDoc || coverDoc || noteDoc);
 
   if (jobLoading) {
@@ -133,6 +136,10 @@ export default function JobDetail() {
       </div>
     );
   }
+
+  // Once there's an interview, prep is the section that matters most.
+  const prepFirst = job.status === "Interview" || job.status === "Offer";
+  const prepSection = <InterviewPrep job={job} doc={prepDoc} />;
 
   const handleStatusChange = (status: string) => {
     updateJob.mutate(
@@ -333,10 +340,12 @@ export default function JobDetail() {
       )}
 
       {/* AI flows */}
+      {prepFirst && prepSection}
       <RoleChat job={job} />
       <TailorFlow job={job} alreadyTailored={!!resumeDoc} />
       <CoverLetterFlow job={job} alreadySaved={!!coverDoc} />
       <AppQuestions job={job} />
+      {!prepFirst && prepSection}
 
       {/* Description + documents */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -361,9 +370,9 @@ export default function JobDetail() {
           <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <h3 className="font-semibold text-lg mb-4">Documents</h3>
             {(() => {
-              // The assessment (its own card) and the saved chat are not files.
+              // The assessment, the saved chat and the prep pack have their own sections; they aren't files.
               const fileDocs = (documents ?? []).filter(
-                (d) => d.type !== "assessment" && d.type !== "chat",
+                (d) => d.type !== "assessment" && d.type !== "chat" && d.type !== "interview_prep",
               );
               return fileDocs.length === 0 ? (
               <div className="text-center py-8 border border-dashed border-border rounded-xl bg-muted/20">

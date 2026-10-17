@@ -11,6 +11,12 @@ import { CHAT_SYSTEM } from "../lib/prompts";
 import { runCoverLetters, type CoverLetterResult } from "../lib/coverLetters";
 import { runAppQuestions } from "../lib/appQuestions";
 import {
+  INTERVIEW_PREP_TYPE,
+  normaliseInterviewPrep,
+  runInterviewPrep,
+  type InterviewPrep,
+} from "../lib/interviewPrep";
+import {
   clearChat,
   formatCoachingNotes,
   loadChat,
@@ -43,6 +49,9 @@ async function loadGenContext(
 ): Promise<{
   job: Job;
   resumeJson: ResumeJson;
+  /** The base resume from the profile, and the approved tailored one (if any). */
+  baseResume: ResumeJson | null;
+  tailoredResume: ResumeJson | null;
   extraAnswers: unknown;
   coachingNotes: string;
 } | null> {
@@ -66,9 +75,11 @@ async function loadGenContext(
     .where(and(eq(documentsTable.jobId, id), eq(documentsTable.type, "resume")))
     .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id))
     .limit(1);
-  const tailored = (latestResumeDoc?.contentJson as ResumeJson | null) ?? null;
-  const base = (profile?.resumeJson as ResumeJson | null) ?? null;
-  const resumeJson = tailored && Array.isArray(tailored.sections) ? tailored : base;
+  const tailoredRaw = (latestResumeDoc?.contentJson as ResumeJson | null) ?? null;
+  const tailored = tailoredRaw && Array.isArray(tailoredRaw.sections) ? tailoredRaw : null;
+  const baseRaw = (profile?.resumeJson as ResumeJson | null) ?? null;
+  const base = baseRaw && Array.isArray(baseRaw.sections) ? baseRaw : null;
+  const resumeJson = tailored ?? base;
 
   if (!resumeJson || !Array.isArray(resumeJson.sections)) {
     res.status(400).json({
@@ -80,7 +91,7 @@ async function loadGenContext(
   // Fold in the saved role-advice chat so tailoring/letters/answers can draw on
   // context the candidate shared there.
   const coachingNotes = formatCoachingNotes(await loadChat(id));
-  return { job, resumeJson, extraAnswers, coachingNotes };
+  return { job, resumeJson, baseResume: base, tailoredResume: tailored, extraAnswers, coachingNotes };
 }
 
 function toQaPairs(value: unknown): QaPair[] {
@@ -561,6 +572,94 @@ router.post("/jobs/:id/questions/save", async (req, res): Promise<void> => {
   await db.insert(qaLogTable).values(pairs.map((r) => ({ jobId: id, question: r.question, answer: r.answer })));
   req.log.info({ jobId: id, count: pairs.length }, "Application answers saved to qa_log");
   res.status(201).json({ saved: pairs.length });
+});
+
+// --- Interview prep pack -------------------------------------------------
+
+/** Save the job's prep pack: update the existing row in place, else insert one. */
+async function savePrep(jobId: number, pack: InterviewPrep) {
+  const [existing] = await db
+    .select({ id: documentsTable.id })
+    .from(documentsTable)
+    .where(and(eq(documentsTable.jobId, jobId), eq(documentsTable.type, INTERVIEW_PREP_TYPE)))
+    .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id))
+    .limit(1);
+  if (existing) {
+    const [row] = await db
+      .update(documentsTable)
+      .set({ contentJson: pack })
+      .where(eq(documentsTable.id, existing.id))
+      .returning();
+    return row;
+  }
+  const [row] = await db
+    .insert(documentsTable)
+    .values({ jobId, type: INTERVIEW_PREP_TYPE, contentJson: pack })
+    .returning();
+  return row;
+}
+
+// Generate (or regenerate, replacing) the pack from the real sources only.
+router.post("/jobs/:id/interview-prep", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+  const ctx = await loadGenContext(id, res);
+  if (!ctx) return;
+  try {
+    const started = Date.now();
+    const pack = await runInterviewPrep({
+      postingText: ctx.job.postingText!,
+      baseResume: ctx.baseResume ?? ctx.resumeJson,
+      submittedResume: ctx.tailoredResume,
+      extraAnswers: ctx.extraAnswers,
+      coachingNotes: ctx.coachingNotes,
+    });
+    if (pack.stories.length === 0) {
+      res.status(502).json({ error: "The AI didn't return any stories. Please try again." });
+      return;
+    }
+    const row = await savePrep(id, pack);
+    req.log.info(
+      {
+        jobId: id,
+        totalMs: Date.now() - started,
+        stories: pack.stories.length,
+        questions: pack.questions.length,
+        gaps: pack.gaps.length,
+        noMetric: pack.stories.filter((s) => s.metric === null).length,
+      },
+      "Interview prep generated",
+    );
+    res.json(serializeDocument(row));
+  } catch (err) {
+    const mapped = aiErrorResponse(err);
+    req.log.error({ err, jobId: id }, "Interview prep failed");
+    res.status(mapped.status).json({ error: mapped.error });
+  }
+});
+
+// Save an edited pack (the whole pack, normalised the same way as generation).
+router.put("/jobs/:id/interview-prep", async (req, res): Promise<void> => {
+  const id = parseId(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+  const [job] = await db.select({ id: jobsTable.id }).from(jobsTable).where(eq(jobsTable.id, id));
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  const { pack } = req.body ?? {};
+  if (!pack || typeof pack !== "object" || !Array.isArray(pack.stories)) {
+    res.status(400).json({ error: "Missing the prep pack to save." });
+    return;
+  }
+  const row = await savePrep(id, normaliseInterviewPrep(pack));
+  res.json(serializeDocument(row));
 });
 
 export default router;

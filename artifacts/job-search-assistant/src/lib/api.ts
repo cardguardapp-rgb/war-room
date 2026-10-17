@@ -304,10 +304,51 @@ export interface AppQuestionsResult {
   answers: DraftedAnswer[];
 }
 
+// Interview prep pack (one `interview_prep` document per job).
+export interface PrepStory {
+  id: string;
+  title: string;
+  requirement: string;
+  situation: string;
+  action: string;
+  result: string;
+  /** One real metric from the sources, or null when none exists. */
+  metric: string | null;
+  source: string;
+}
+
+export interface PrepQuestion {
+  id: string;
+  question: string;
+  /** The id of the story that answers it ("" if none). */
+  story_id: string;
+  angle: string;
+}
+
+export interface PrepGap {
+  id: string;
+  requirement: string;
+  gap: string;
+  how_to_handle: string;
+}
+
+export interface PrepAsk {
+  id: string;
+  question: string;
+  why: string;
+}
+
+export interface InterviewPrep {
+  stories: PrepStory[];
+  questions: PrepQuestion[];
+  gaps: PrepGap[];
+  questions_to_ask: PrepAsk[];
+}
+
 export interface Document {
   id: number;
   job_id: number;
-  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' | 'assessment' | 'chat';
+  type: 'resume' | 'cover_letter' | 'cover_letter_plain' | 'cover_note' | 'assessment' | 'chat' | 'interview_prep';
   content_json: any;
   docx_object_key: string | null;
   pdf_object_key: string | null;
@@ -546,6 +587,10 @@ export const api = {
       fetchApi<AppQuestionsResult>(`/jobs/${id}/questions/finalize`, { method: "POST", body: JSON.stringify(data) }),
     questionsSave: (id: number, data: { answers: { question: string; answer: string }[] }) =>
       fetchApi<{ saved: number }>(`/jobs/${id}/questions/save`, { method: "POST", body: JSON.stringify(data) }),
+    // Interview prep pack
+    interviewPrepGenerate: (id: number) => fetchApi<Document>(`/jobs/${id}/interview-prep`, { method: "POST" }),
+    interviewPrepSave: (id: number, pack: InterviewPrep) =>
+      fetchApi<Document>(`/jobs/${id}/interview-prep`, { method: "PUT", body: JSON.stringify({ pack }) }),
   },
   documents: {
     list: (jobId: number) => fetchApi<Document[]>(`/jobs/${jobId}/documents`),
