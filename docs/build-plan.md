@@ -85,7 +85,7 @@ the live login won't match.
 
 ---
 
-## [ ] M2: Model settings and streaming
+## [x] M2: Model settings and streaming
 
 **Scope**
 - Every model ID moves to its own environment variable per task:
